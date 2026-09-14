@@ -1,0 +1,69 @@
+[package]
+name         = "vela-wasm"
+version      = "0.1.0"
+description  = "A post-link obfuscator for WebAssembly modules"
+authors      = [ "Amaan Qureshi <contact@amaanq.com>" ]
+repository   = "https://github.com/manic-systems/vela"
+edition      = "2024"
+rust-version = "1.98.1"
+license      = "EUPL-1.2"
+keywords     = [ "wasm", "webassembly", "obfuscation", "binary-rewriting" ]
+categories   = [ "command-line-utilities", "development-tools::build-utils", "wasm" ]
+
+[lib]
+name = "vela"
+
+[[bin]]
+name = "vela"
+path = "src/main.rs"
+
+[dependencies]
+color-eyre = "0.6.5"
+eyre       = "0.6.14"
+pound      = "0.1.7"
+postcard   = { default-features = false, features = [ "use-std" ], version = "1.1.3" }
+serde      = { features = [ "derive" ], version = "1.0.229" }
+thiserror  = "2.0.18"
+walrus     = "0.27.2"
+wasmi      = { features = [ "portable-dispatch" ], version = "2.0.0" }
+wasmi_core = "2.0.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { features = [ "process" ], version = "1.1.4" }
+
+[profile.release]
+codegen-units = 1
+lto           = "thin"
+strip         = true
+
+[lints.clippy]
+cargo    = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+blanket_clippy_restriction_lints = "allow"
+restriction                      = { level = "warn", priority = -1 }
+
+arbitrary_source_item_ordering  = "allow"
+arithmetic_side_effects         = "allow"
+else_if_without_else            = "allow"
+exhaustive_enums                = "allow"
+exhaustive_structs              = "allow"
+float_arithmetic                = "allow"
+implicit_return                 = "allow"
+indexing_slicing                = "allow"
+integer_division                = "allow"
+integer_division_remainder_used = "allow"
+little_endian_bytes             = "allow"
+missing_trait_methods           = "allow"
+mod_module_files                = "allow"
+multiple_crate_versions         = "allow"
+question_mark_used              = "allow"
+ref_patterns                    = "allow"
+rest_pattern_accessible_field   = "allow"
+separated_literal_suffix        = "allow"
+single_call_fn                  = "allow"
+std_instead_of_alloc            = "allow"
+std_instead_of_core             = "allow"
+tests_outside_test_module       = "allow"
+unneeded_field_pattern          = "allow"
