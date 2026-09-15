@@ -352,16 +352,146 @@ impl fmt::Display for FunctionReport {
    }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum AnalysisReason {
+   Argument,
+   ReturnValue,
+   GlobalValue,
+   MemoryValue,
+   UnsupportedInstruction,
+   ImportedCall,
+   DynamicCall,
+   BranchMerge,
+   LoopValue,
+   ValueLimit,
+   ContextLimit,
+   AnalysisLimit,
+   UnknownLength,
+}
+
+impl fmt::Display for AnalysisReason {
+   #[inline]
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      f.write_str(match *self {
+         Self::Argument => "unknown argument",
+         Self::ReturnValue => "unknown return value",
+         Self::GlobalValue => "unknown global",
+         Self::MemoryValue => "value loaded from memory",
+         Self::UnsupportedInstruction => "unsupported instruction",
+         Self::ImportedCall => "imported call",
+         Self::DynamicCall => "dynamic call",
+         Self::BranchMerge => "branch merge",
+         Self::LoopValue => "changing loop value",
+         Self::ValueLimit => "value set limit",
+         Self::ContextLimit => "call context limit",
+         Self::AnalysisLimit => "analysis work limit",
+         Self::UnknownLength => "unknown access length",
+      })
+   }
+}
+
+#[derive(Debug)]
+pub struct UnresolvedUse {
+   pub function:    usize,
+   pub instruction: Option<u32>,
+   pub reasons:     BTreeSet<AnalysisReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum EagerReason {
+   Requested,
+   UnresolvedMemory,
+   Relocatable,
+   DataPointer,
+   Unreferenced,
+}
+
+impl fmt::Display for EagerReason {
+   #[inline]
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      f.write_str(match *self {
+         Self::Requested => "eager requested",
+         Self::UnresolvedMemory => "unresolved memory use",
+         Self::Relocatable => "relocatable placement",
+         Self::DataPointer => "pointer stored in data",
+         Self::Unreferenced => "no proven reference",
+      })
+   }
+}
+
+#[derive(Debug)]
+pub struct SegmentReport {
+   pub index:               usize,
+   pub bytes:               usize,
+   pub functions:           Vec<usize>,
+   pub eager_reasons:       BTreeSet<EagerReason>,
+   pub startup_may_decrypt: bool,
+}
+
+impl fmt::Display for UnresolvedUse {
+   #[inline]
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      write!(f, "unresolved #{}", self.function)?;
+
+      if let Some(location) = self.instruction {
+         write!(f, " at {location:#x}")?;
+      }
+
+      for reason in &self.reasons {
+         write!(f, ", {reason}")?;
+      }
+
+      Ok(())
+   }
+}
+
+impl fmt::Display for SegmentReport {
+   #[inline]
+   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      let staging = if self.eager_reasons.is_empty() {
+         "lazy"
+      } else {
+         "eager"
+      };
+      write!(f, "segment #{} {} bytes, {staging}", self.index, self.bytes)?;
+
+      for reason in &self.eager_reasons {
+         write!(f, ", {reason}")?;
+      }
+
+      if !self.functions.is_empty() {
+         f.write_str(", functions")?;
+
+         for function in &self.functions {
+            write!(f, " #{function}")?;
+         }
+      }
+
+      if self.startup_may_decrypt {
+         f.write_str(", may decrypt during startup")?;
+      }
+
+      Ok(())
+   }
+}
+
 /// What each pass did, so the CLI can report something more useful than "done".
 #[derive(Debug, Default)]
 pub struct Report {
    pub functions:                  Vec<FunctionReport>,
+   pub segments:                   Vec<SegmentReport>,
+   pub unresolved:                 Vec<UnresolvedUse>,
    pub segments_total:             usize,
    pub segments_encrypted:         usize,
    pub segments_lazy:              usize,
    pub segments_forced_eager:      usize,
    pub unresolved_memory_uses:     usize,
    pub bytes_encrypted:            usize,
+   pub bytes_eager:                usize,
+   pub bytes_lazy:                 usize,
+   pub bytes_startup_upper_bound:  usize,
    pub markers_rewritten:          usize,
    pub dispatch_markers_rewritten: usize,
    pub markers_skipped:            usize,
@@ -385,6 +515,11 @@ impl fmt::Display for Report {
          f,
          "staging   {} lazy, {} forced eager, {} unresolved memory uses",
          self.segments_lazy, self.segments_forced_eager, self.unresolved_memory_uses
+      )?;
+      writeln!(
+         f,
+         "bytes     {} lazy, {} eager, {} startup upper bound",
+         self.bytes_lazy, self.bytes_eager, self.bytes_startup_upper_bound
       )?;
       writeln!(
          f,

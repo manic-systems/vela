@@ -322,6 +322,14 @@ fn run(
       for function in &report.functions {
          println!("{function}");
       }
+
+      for unresolved in &report.unresolved {
+         println!("{unresolved}");
+      }
+
+      for segment in &report.segments {
+         println!("{segment}");
+      }
    }
    let before_len = u32::try_from(input.len()).map_or(f64::NAN, f64::from);
    let after_len = u32::try_from(output.len()).map_or(f64::NAN, f64::from);

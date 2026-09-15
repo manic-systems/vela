@@ -240,8 +240,8 @@ pub fn serve(address_space: u64, message_bytes: usize) -> Result<(), Verificatio
    }
    let request = verify_wire::decode::<Request<Vec<u8>, Vec<verify::Action>>>(&bytes)?;
    let compared = request.actions.as_ref().map_or_else(
-      || verify::compare(&request.before, &request.after, request.host),
-      |actions| verify::compare_scenario(&request.before, &request.after, actions, request.host),
+      || verify::compare(&request.before, &request.after, &request.host),
+      |actions| verify::compare_scenario(&request.before, &request.after, actions, &request.host),
    );
    let response = verify_wire::encode(&Response::from(compared), message_bytes)?;
    io::stdout()

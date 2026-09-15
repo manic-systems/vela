@@ -17,7 +17,7 @@ use wasmi::{
    errors,
 };
 
-use crate::verify_limits::Budget;
+use crate::verify_host::HostState;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -71,6 +71,14 @@ pub enum Error {
    },
    #[error("no zero-argument exports to compare")]
    NoExports,
+   #[error("verification is inconclusive because every compared call trapped")]
+   AllTrapped,
+   #[error("checking the host script for {side} module")]
+   HostScript {
+      side:   ModuleSide,
+      #[source]
+      source: wasmi::Error,
+   },
    #[error("scenario contains no calls or memory reads")]
    EmptyScenario,
    #[error("memory export {name} is unavailable in {side} module")]
@@ -101,7 +109,7 @@ pub enum Error {
 }
 
 #[derive(Debug, Error)]
-#[error("cannot compare non-null {0:?} results across instances")]
+#[error("cannot compare non-null {0:?} values across instances")]
 pub struct UnsupportedValue(ValType);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,11 +186,30 @@ impl fmt::Display for Resource {
    }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// Import scripts cover initialization and every call in one verification
+/// workload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportCall {
+   pub module:    String,
+   pub name:      String,
+   pub arguments: Vec<Value>,
+   pub results:   Vec<Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum HostImports {
+   #[default]
+   Zero,
+   Script(Vec<ImportCall>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostConfig {
    pub memory_base: i32,
    pub table_base:  i32,
    pub limits:      Limits,
+   pub imports:     HostImports,
 }
 
 impl Default for HostConfig {
@@ -192,6 +219,7 @@ impl Default for HostConfig {
          memory_base: IMPORT_BASE,
          table_base:  IMPORT_BASE,
          limits:      Limits::default(),
+         imports:     HostImports::Zero,
       }
    }
 }
@@ -215,12 +243,12 @@ pub enum Action {
    },
 }
 
-impl TryFrom<Val> for Value {
+impl TryFrom<&Val> for Value {
    type Error = UnsupportedValue;
 
    #[inline]
-   fn try_from(value: Val) -> Result<Self, Self::Error> {
-      Ok(match value {
+   fn try_from(value: &Val) -> Result<Self, Self::Error> {
+      Ok(match *value {
          Val::I32(inner) => Self::I32(inner),
          Val::I64(inner) => Self::I64(inner),
          Val::F32(inner) => Self::F32(inner.to_bits()),
@@ -411,8 +439,9 @@ const STUB_HEADROOM: u32 = 4096;
 /// # Errors
 ///
 /// Fails if either module can't execute, the export sets differ, or a result
-/// can't be compared across instances, or its budget is exhausted. Requires a
-/// zero-argument export.
+/// can't be compared across instances, or its budget is exhausted. All-trap
+/// agreement and incomplete host scripts also fail. Requires a zero-argument
+/// export.
 #[inline]
 #[expect(
    clippy::pub_with_shorthand,
@@ -421,7 +450,7 @@ const STUB_HEADROOM: u32 = 4096;
 pub(crate) fn compare(
    before: &[u8],
    after: &[u8],
-   host: HostConfig,
+   host: &HostConfig,
 ) -> Result<Vec<Comparison>, Error> {
    let original = Execution::new(before, ModuleSide::Original, host)?.run()?;
    let rewritten = Execution::new(after, ModuleSide::Rewritten, host)?.run()?;
@@ -443,6 +472,12 @@ pub(crate) fn compare(
    }
    if original.exports.is_empty() {
       return Err(Error::NoExports);
+   }
+
+   if original.exports.iter().all(|(name, outcome)| {
+      matches!(*outcome, CallOutcome::Trapped(_)) && *outcome == rewritten.exports[name]
+   }) {
+      return Err(Error::AllTrapped);
    }
 
    let mut results = original
@@ -472,8 +507,8 @@ pub(crate) fn compare(
 /// # Errors
 ///
 /// Fails for missing exports, invalid arguments or memory ranges, unsupported
-/// results, failed instantiation, exhausted budgets, or a scenario without
-/// calls or reads.
+/// results, failed instantiation, exhausted budgets, incomplete host scripts,
+/// or a scenario without calls or reads.
 #[inline]
 #[expect(
    clippy::pub_with_shorthand,
@@ -483,7 +518,7 @@ pub(crate) fn compare_scenario(
    before: &[u8],
    after: &[u8],
    actions: &[Action],
-   host: HostConfig,
+   host: &HostConfig,
 ) -> Result<Vec<Comparison>, Error> {
    if !actions
       .iter()
@@ -530,6 +565,9 @@ pub(crate) fn compare_scenario(
          },
       }
    }
+   original.finish_script()?;
+   rewritten.finish_script()?;
+
    comparisons.push(Comparison::Memory {
       before: original.memory_digest(original_instance),
       after:  rewritten.memory_digest(rewritten_instance),
@@ -546,34 +584,34 @@ struct Outcome {
 }
 
 /// One module and its deterministic verifier host.
-struct Execution {
+struct Execution<'host> {
    /// Compiled module awaiting instantiation.
    module: wasmi::Module,
    /// Runtime state shared by the instance and host stubs.
-   store:  wasmi::Store<Budget>,
+   store:  wasmi::Store<HostState<'host>>,
    /// Host definitions used to satisfy module imports.
-   linker: wasmi::Linker<Budget>,
+   linker: wasmi::Linker<HostState<'host>>,
    /// Module identity included in verification errors.
    side:   ModuleSide,
 }
 
-impl Execution {
+impl<'host> Execution<'host> {
    /// Compiles a module and prepares its host imports.
    #[expect(
       clippy::expect_used,
       clippy::unwrap_in_result,
       reason = "fuel is enabled on this engine"
    )]
-   fn new(wasm: &[u8], side: ModuleSide, host: HostConfig) -> Result<Self, Error> {
+   fn new(wasm: &[u8], side: ModuleSide, host: &'host HostConfig) -> Result<Self, Error> {
       let mut config = wasmi::Config::default();
       config.consume_fuel(true);
       let engine = wasmi::Engine::new(&config);
       let module =
          wasmi::Module::new(&engine, wasm).map_err(|source| Error::Parse { side, source })?;
-      let mut store = wasmi::Store::new(&engine, Budget::new(host.limits));
-      store.limiter(|budget| budget);
+      let mut store = wasmi::Store::new(&engine, HostState::new(host));
+      store.limiter(|state| &mut state.budget);
       store.set_fuel(host.limits.fuel).expect("fuel is enabled");
-      let linker = <wasmi::Linker<Budget>>::new(&engine);
+      let linker = <wasmi::Linker<HostState<'host>>>::new(&engine);
 
       let mut execution = Self {
          module,
@@ -585,6 +623,7 @@ impl Execution {
          execution
             .store
             .data()
+            .budget
             .exceeded()
             .map_or(error, |resource| Error::LimitExceeded { side, resource })
       })?;
@@ -616,8 +655,19 @@ impl Execution {
          exports.insert(name, outcome);
       }
 
+      self.finish_script()?;
       let memory = self.memory_digest(instance);
       Ok(Outcome { exports, memory })
+   }
+
+   /// Skipped callbacks must fail even when all guest results happen to agree.
+   fn finish_script(&self) -> Result<(), Error> {
+      self.store.data().finish().map_err(|source| {
+         Error::HostScript {
+            side: self.side,
+            source,
+         }
+      })
    }
 
    /// Start runs once so later scenario actions observe the same instance
@@ -656,7 +706,7 @@ impl Execution {
       match func.call(&mut self.store, &inputs, &mut outputs) {
          Ok(()) => {
             let values = outputs
-               .into_iter()
+               .iter()
                .map(Value::try_from)
                .collect::<Result<_, _>>()
                .map_err(|source| {
@@ -691,6 +741,7 @@ impl Execution {
       self
          .store
          .data()
+         .budget
          .exceeded()
          .or_else(|| {
             match source.as_trap_code() {
@@ -737,7 +788,7 @@ impl Execution {
                source: errors::MemoryError::OutOfBoundsAccess,
             }
          })?;
-      if !self.store.data_mut().capture(len) {
+      if !self.store.data_mut().budget.capture(len) {
          return Err(Error::LimitExceeded {
             side:     self.side,
             resource: Resource::Reads,
@@ -787,10 +838,10 @@ impl Execution {
       })
    }
 
-   /// Supplies deterministic stubs for host imports. Imported functions return
-   /// default values, so both modules receive the same inputs. The stubs don't
-   /// model real host behavior.
-   fn stub_imports(&mut self, host: HostConfig) -> Result<(), Error> {
+   /// Both modules receive the same import expectations. Zero stubs and
+   /// scripted return values cannot model callbacks that mutate guest memory
+   /// or reenter the instance.
+   fn stub_imports(&mut self, host: &HostConfig) -> Result<(), Error> {
       let side = self.side;
       for import in self.module.imports() {
          let (module_name, field) = (import.module().to_owned(), import.name().to_owned());
@@ -806,15 +857,20 @@ impl Execution {
             wasmi::ExternType::Func(ref func_ty) => {
                let signature = func_ty.clone();
                let results_ty = signature.results().to_vec();
+               let import_module = module_name.clone();
+               let import_name = field.clone();
 
                wasmi::Func::new(
                   &mut self.store,
                   signature,
-                  move |_caller, _params, results| {
-                     for (slot, result_ty) in results.iter_mut().zip(&results_ty) {
-                        *slot = Val::default_for_ty(*result_ty);
-                     }
-                     Ok(())
+                  move |mut caller, params, results| {
+                     caller.data_mut().call(
+                        &import_module,
+                        &import_name,
+                        params,
+                        &results_ty,
+                        results,
+                     )
                   },
                )
                .into()

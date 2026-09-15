@@ -38,7 +38,9 @@ Use `--function` to select input functions by exact name or export name. For a
 stripped module, use an input function index such as `--function '#12'`. Repeat
 the option to select several functions. Unmatched selectors fail the rewrite.
 `--report-functions` prints those indices, instruction counts before and after
-rewriting, pass counts, and reasons flattening refused a sequence.
+rewriting, pass counts, and reasons flattening refused a sequence. It also
+reports unresolved memory uses by input function and instruction offset, and
+each segment's size, referencing functions, and reasons for eager decryption.
 Indices refer to that input file and can change when it is rebuilt.
 
 `--call-function`, `--marker-function`, `--flatten-function` and
@@ -90,7 +92,7 @@ memories or a 64-bit memory are rejected before rewriting.
 | `--marker-function <selector>`   | Inherited   | Override constant selection.                                 |
 | `--flatten-function <selector>`  | Inherited   | Override flattening selection.                               |
 | `--opaque-function <selector>`   | Inherited   | Override opaque selection.                                   |
-| `--report-functions`             | Off         | Per-function counts and flatten refusals.                    |
+| `--report-functions`             | Off         | Function counts, unresolved uses, and staging decisions.     |
 | `--check`                        | Off         | Compare before writing.                                      |
 | `--fuel <u64>`                   | 100 million | Per-module verification fuel, also accepted by `vela check`. |
 | `--timeout <seconds>`            | 30          | Deadline for the entire verification worker.                 |
@@ -117,16 +119,31 @@ memories or a 64-bit memory are rejected before rewriting.
 Data encryption rewrites supported active segments and adds a runtime decryptor.
 With lazy staging, vela puts a decryption gate at the entry of each function
 whose resolved memory access or pointer argument reaches a segment. The analysis
-carries constants through locals and wrapping `i32` arithmetic within each
-instruction sequence. It includes load and store offsets, access widths, and
-bulk-memory ranges, so an access crossing two segments gates both. The first
-call decrypts the segment in place, whereas later calls skip the decryption.
+carries sets of possible values through locals, wrapping `i32` arithmetic,
+branches, and direct local calls, including tail calls. It includes load and
+store offsets, access widths, and bulk-memory ranges, so an access crossing two
+segments gates both. The first call decrypts the segment in place, whereas
+later calls skip the decryption.
 
-An unresolved memory address, length, imported call, indirect call or unsupported
-instruction forces all encrypted segments to decrypt during startup. Values
-crossing structured control flow lose their known state, so loops and branches
-can also force eager decryption. Vela does not yet propagate values between
-functions or merge branch states.
+An unresolved memory address, length, escaping value, imported call, indirect
+call or unsupported instruction forces all encrypted segments to decrypt during
+startup. Branches merge possible values, and loops retain invariant values while
+changing values can become unknown. Functions receive separate analysis contexts
+for known arguments. Exported and address-taken functions also receive unknown
+arguments because their callers cannot all be proven locally. Function selection
+does not restrict this analysis.
+
+Unknown escaping values include unknown scalars, since the analysis cannot
+distinguish them from pointers. Known escaping addresses gate the segment
+containing the base byte. They do not imply an object size. Use `--eager` when
+host reads can span into other segments that have not been decrypted.
+
+Value sets are limited to eight alternatives and functions to sixteen
+specialized call contexts plus a conservative fallback. Recursive calls use
+the same worklist as other calls. A shared work budget bounds the analysis,
+with exhaustion forcing eager decryption. Constant provenance is bounded
+separately, so losing the locations used for marker selection does not discard
+a known address.
 
 A segment also stays eager if its address depends on a base global, if any
 four-byte window in data points into it, or if no function has a resolved
@@ -134,6 +151,12 @@ reference to it. `--eager` decrypts all encrypted segments during startup,
 before the module's original start function runs. Encryption rejects active
 segments whose placements cannot be proven disjoint, since separately decrypting
 shared bytes would corrupt the initialized data.
+
+The report separates eager and lazy byte counts. Its startup byte count is an
+upper bound that also includes lazy gates reachable from the original start
+function. A lazy segment can therefore still decrypt during initialization.
+Gates remain at function entry, so a shared helper decrypts the union of the
+segments referenced by its analyzed call contexts.
 
 Staging delays decryption. It doesn't erase plaintext afterward, so running
 enough functions can leave every segment decrypted. A module with one large data
@@ -157,7 +180,7 @@ emitting it and leaves the original constant alone if the result doesn't match.
 
 vela records the dispatch constants it generates, so the marker pass can find
 them even after flattening moves their instructions. The
-[address analysis](src/references.rs) also records original constants that
+[address analysis](src/references/solver.rs) also records original constants that
 contribute to resolved data addresses, including arithmetic operands outside the
 data segment. A coincidental integer inside a data segment is no longer enough
 to select a constant.
@@ -191,21 +214,37 @@ The checker supplies stub imports. It doesn't run the module in your
 application's host, and it doesn't call exports that take arguments. Export
 mismatches fail the check, including added or removed zero-argument exports.
 Failed instantiation, no callable exports, and non-null reference results also
-fail the check. Memory differences are advisory because lazy staging can leave
-unused segments encrypted.
+fail the check. If every compared call traps with the same kind in both modules,
+the default check fails as inconclusive. A returned value becoming a trap is
+always a mismatch. Memory differences are advisory because lazy staging can
+leave unused segments encrypted.
 
 The library provides `worker::Verifier::compare_scenario` for exports with arguments
 and state shared across calls. A scenario is an ordered list of typed calls,
 writes to exported memory, and reads of specific memory ranges. Both modules
 execute the whole list on one instance each. Requested memory reads compare
 exact bytes and are fatal differences, while the final whole-memory digest
-remains advisory. The caller checks the returned comparisons with `agrees` and
-`is_advisory`, just as the CLI does.
+remains advisory. Scenarios compare original and rewritten outcomes, not
+independent expected values. They deliberately allow matching traps, including
+an all-trap workload, so callers can verify intentional trap behavior. A
+rewritten trap disagrees when the original call returned. The caller checks the
+returned comparisons with `agrees` and `is_advisory`, just as the CLI does.
 
 `verify::HostConfig` sets separate memory and table bases, both defaulting to 64.
 The stub host preserves imported global mutability and initializes unrelated
-globals to their type's zero value. Imported functions still return zero values,
-so applications with host callbacks need verification in their own host too.
+globals to their type's zero value. `HostConfig.imports` defaults to
+`HostImports::Zero`, which returns type-appropriate zero values from imported
+functions. For callback-dependent workloads, use `HostImports::Script` with an
+ordered list of `ImportCall` values. Each entry specifies the import module and
+name, expected typed arguments, and typed return values.
+
+Each instance consumes the script independently, starting with initialization
+and continuing across all calls. Wrong callback names, arguments, result types
+or result counts fail verification. Exhausted scripts, unused entries and
+non-null reference arguments fail too. Script errors are host failures, so
+matching failures cannot count as guest-trap agreement. Scripts supply return
+values only, they cannot mutate guest memory or reenter the module. Those
+callbacks still need verification in the application's host.
 
 Verification gives each module a finite budget shared across initialization and
 all subsequent calls. Defaults are 100 million fuel units, 64 MiB of linear
@@ -255,8 +294,9 @@ would exhaust the same budget. Ordinary guest traps remain comparable. A
 returns its normal failure value.
 
 > [!WARNING]
-> Matching trap kinds count as agreement, so a passing check can still mean
-> both calls trapped.
+> Matching trap kinds count as agreement within a workload. The default check
+> rejects all-trap agreement, but it still samples only zero-argument exports
+> under the stub host. A passing check is not a proof of equivalence.
 
 Every rewrite also performs a [placement audit](src/audit.rs), even without
 `--check`. The library rejects active data or element segments at absolute `i32`
@@ -277,12 +317,13 @@ vela run fixtures/sample.wasm -o sample.obf.wasm --seed 1 --check
 ```
 check     1 exports and linear memory agree
 data      4/4 segments encrypted, 91 bytes
-staging   0 lazy, 4 forced eager, 3 unresolved memory uses
-markers   10 constants rewritten (4 dispatch) over a pool of 8, 0 left alone
+staging   0 lazy, 4 forced eager, 13 unresolved memory uses
+bytes     0 lazy, 91 eager, 91 startup upper bound
+markers   11 constants rewritten (4 dispatch) over a pool of 8, 0 left alone
 calls     4 direct calls promoted to indirect
 opaque    0 bogus branches inserted
 flatten   0 sequences into 0 dispatch regions, 0 not safely splittable
-size      379 -> 912 bytes (+140.6%)
+size      379 -> 928 bytes (+144.9%)
 ```
 
 The fixture is only 379 bytes, so the added runtime accounts for much of its

@@ -37,6 +37,8 @@ mod selection;
 /// Operand stack tracking for flattening cuts.
 mod stack;
 pub mod verify;
+/// Each verifier instance consumes the same host script independently.
+mod verify_host;
 /// Aggregate resource accounting for verification.
 mod verify_limits;
 /// Typed messages exchanged with the verification process.
@@ -70,7 +72,7 @@ use crate::{
       Report,
    },
    pool::Pool,
-   references::References,
+   references::solver::References,
    rng::Rng,
 };
 
