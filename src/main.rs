@@ -90,6 +90,10 @@ enum Command {
       #[pound(long)]
       no_data_enc: bool,
 
+      /// Fold encrypted data checksums into marker state at decryption.
+      #[pound(long)]
+      data_integrity: bool,
+
       /// Decrypt every segment up front instead of on first use.
       #[pound(long)]
       eager: bool,
@@ -159,8 +163,7 @@ enum Command {
       #[pound(long)]
       process_memory: Option<u64>,
 
-      /// Name vela's own functions in the name section. Useful when debugging a
-      /// broken rewrite, pointless to ship.
+      /// Name generated helpers for debugging, exposing them to readers.
       #[pound(long)]
       debug_names: bool,
    },
@@ -202,6 +205,7 @@ fn main() -> Result<()> {
          output,
          seed,
          no_data_enc,
+         data_integrity,
          eager,
          no_markers,
          evolve_pool,
@@ -221,19 +225,16 @@ fn main() -> Result<()> {
          process_memory,
          debug_names,
       } => {
-         let mut pass_functions = BTreeMap::new();
-         if !call_function.is_empty() {
-            pass_functions.insert(CodePass::Indirect, call_function);
-         }
-         if !marker_function.is_empty() {
-            pass_functions.insert(CodePass::Markers, marker_function);
-         }
-         if !flatten_function.is_empty() {
-            pass_functions.insert(CodePass::Flatten, flatten_function);
-         }
-         if !opaque_function.is_empty() {
-            pass_functions.insert(CodePass::Opaque, opaque_function);
-         }
+         let pass_functions = [
+            (CodePass::Indirect, call_function),
+            (CodePass::Markers, marker_function),
+            (CodePass::Flatten, flatten_function),
+            (CodePass::Opaque, opaque_function),
+         ]
+         .into_iter()
+         .filter(|entry| !entry.1.is_empty())
+         .collect::<BTreeMap<_, _>>();
+
          let config = Config {
             functions: function,
             pass_functions,
@@ -241,6 +242,7 @@ fn main() -> Result<()> {
             exclude_reachable,
             seed,
             data_enc: !no_data_enc,
+            data_integrity,
             lazy: !eager,
             markers: !no_markers,
             evolve_pool,

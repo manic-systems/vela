@@ -5,6 +5,8 @@ use walrus::{
    FunctionBuilder,
    FunctionId,
    GlobalId,
+   InstrSeqBuilder,
+   LocalId,
    Module,
    ValType,
    ir::{
@@ -31,7 +33,6 @@ use crate::{
 };
 
 /// Mutable globals and their values after startup mixing.
-///
 /// Marker expressions use mixed logical values, not the emitted initializers.
 pub struct Pool {
    /// Readers advance packed state without changing the logical value.
@@ -43,6 +44,46 @@ pub struct Pool {
 }
 
 impl Pool {
+   /// New mismatch bits accumulate so later segments cannot undo corruption.
+   pub fn fold_integrity(
+      &self,
+      body: &mut InstrSeqBuilder<'_>,
+      delta: LocalId,
+      expected: LocalId,
+      latch: GlobalId,
+   ) {
+      body
+         .local_get(delta)
+         .local_get(expected)
+         .binop(BinaryOp::I32Xor)
+         .global_get(latch)
+         .i32_const(-1)
+         .binop(BinaryOp::I32Xor)
+         .binop(BinaryOp::I32And)
+         .local_tee(delta)
+         .global_get(latch)
+         .binop(BinaryOp::I32Or)
+         .global_set(latch);
+
+      for (&(global, reader), rotation) in self.slots.iter().zip((0_i32..32_i32).cycle()) {
+         body
+            .instr(GlobalGet { global })
+            .instr(LocalGet { local: delta });
+
+         if rotation != 0_i32 {
+            body.i32_const(rotation).binop(BinaryOp::I32Rotl);
+         }
+
+         if reader.is_some() {
+            body.unop(UnaryOp::I64ExtendUI32).binop(BinaryOp::I64Xor);
+         } else {
+            body.binop(BinaryOp::I32Xor);
+         }
+
+         body.instr(GlobalSet { global });
+      }
+   }
+
    /// Lowers an expression into walrus instructions.
    #[inline]
    pub fn lower(&self, expr: &Expr, out: &mut Vec<Instr>) {

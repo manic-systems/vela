@@ -95,6 +95,10 @@ pub enum TransformError {
    Table(#[source] Box<dyn StdError + Send + Sync>),
    #[error("cannot prove active data segments have disjoint placements")]
    DataPlacement,
+   #[error("data integrity requires data encryption and marker rewriting")]
+   IntegrityPasses,
+   #[error("data integrity requires encrypted bytes and at least one rewritten marker")]
+   IntegrityCoverage,
    #[error("output violates placement rules\n{}", .0.join("\n"))]
    Placement(Vec<String>),
 }
@@ -140,6 +144,10 @@ struct Rewriter<'config> {
 impl<'config> Rewriter<'config> {
    /// Parses the input and prepares shared rewrite state.
    fn new(wasm: &[u8], config: &'config Config) -> Result<Self, TransformError> {
+      if config.data_integrity && (!config.data_enc || !config.markers) {
+         return Err(TransformError::IntegrityPasses);
+      }
+
       let mut module =
          Module::from_buffer(wasm).map_err(|source| TransformError::Parse(source.into()))?;
       let memories = module.memories.iter().count();
@@ -216,6 +224,12 @@ impl<'config> Rewriter<'config> {
 
       if self.config.opaque {
          passes::opaque::run(&mut self);
+      }
+
+      if self.config.data_integrity
+         && (self.report.bytes_integrity == 0 || self.report.markers_rewritten == 0)
+      {
+         return Err(TransformError::IntegrityCoverage);
       }
 
       let faults = audit::placement(&self.module);

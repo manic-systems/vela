@@ -1,6 +1,9 @@
 use std::num::NonZeroU64;
 
 use walrus::{
+   ConstExpr,
+   InstrSeqBuilder,
+   LocalId,
    ValType,
    ir,
    ir::{
@@ -29,7 +32,11 @@ use walrus::{
 use crate::{
    analysis,
    mba::BinKind,
+   pool::Pool,
 };
+
+/// Odd multiplication preserves single-byte differences in the checksum.
+pub const CHECKSUM_FACTOR: i32 = 16_777_619;
 
 /// Maps a marker operator to its wasm binary opcode.
 impl From<BinKind> for BinaryOp {
@@ -56,22 +63,35 @@ pub struct Decryptor {
 }
 
 impl Decryptor {
-   /// Builds the runtime decryptor, `(ptr: i32, len: i32, seed: i64) -> ()`.
-   ///
-   /// Its byte stream must match [`crate::rng::KeyStream`], which encrypts the
-   /// segments at build time. A mismatch leaves corrupt bytes in linear memory.
+   /// Checksums cover ciphertext once, before guest code can mutate plaintext.
    #[inline]
-   pub fn new(module: &mut walrus::Module, memory: walrus::MemoryId, names: bool) -> Self {
-      let mut builder = walrus::FunctionBuilder::new(
-         &mut module.types,
-         &[ValType::I32, ValType::I32, ValType::I64],
-         &[],
-      );
+   pub fn new(
+      module: &mut walrus::Module,
+      memory: walrus::MemoryId,
+      names: bool,
+      pool: Option<&Pool>,
+   ) -> Self {
+      let mut params = vec![ValType::I32, ValType::I32, ValType::I64];
+      if pool.is_some() {
+         params.push(ValType::I32);
+      }
+
+      let mut builder = walrus::FunctionBuilder::new(&mut module.types, &params, &[]);
 
       let ptr = module.locals.add(ValType::I32);
       let len = module.locals.add(ValType::I32);
       let seed = module.locals.add(ValType::I64);
       let state = module.locals.add(ValType::I64);
+      let integrity = pool.map(|_| {
+         (
+            module.locals.add(ValType::I32),
+            module.locals.add(ValType::I32),
+            module.locals.add(ValType::I32),
+            module
+               .globals
+               .add_local(ValType::I32, true, false, ConstExpr::Value(Value::I32(0))),
+         )
+      });
 
       if names {
          builder.name("vela_decrypt".to_owned());
@@ -94,23 +114,7 @@ impl Decryptor {
                   })
                   .instr(BrIf { block: done_id });
 
-               for (shift, op) in [
-                  (13, BinaryOp::I64Shl),
-                  (7, BinaryOp::I64ShrU),
-                  (17, BinaryOp::I64Shl),
-               ] {
-                  walk
-                     .instr(LocalGet { local: state })
-                     .instr(LocalGet { local: state })
-                     .instr(Const {
-                        value: Value::I64(shift),
-                     })
-                     .instr(Binop { op })
-                     .instr(Binop {
-                        op: BinaryOp::I64Xor,
-                     })
-                     .instr(LocalSet { local: state });
-               }
+               stream_step(walk, state);
 
                walk
                   .instr(LocalGet { local: ptr })
@@ -124,7 +128,20 @@ impl Decryptor {
                         align:  1,
                         offset: 0,
                      },
-                  })
+                  });
+
+               if let Some((_, hash, byte, _)) = integrity {
+                  walk
+                     .local_tee(byte)
+                     .local_get(hash)
+                     .binop(BinaryOp::I32Xor)
+                     .i32_const(CHECKSUM_FACTOR)
+                     .binop(BinaryOp::I32Mul)
+                     .local_set(hash)
+                     .local_get(byte);
+               }
+
+               walk
                   .instr(LocalGet { local: state })
                   .instr(Unop {
                      op: UnaryOp::I32WrapI64,
@@ -142,27 +159,26 @@ impl Decryptor {
                   });
 
                walk
-                  .instr(LocalGet { local: ptr })
-                  .instr(Const {
-                     value: Value::I32(1),
-                  })
-                  .instr(Binop {
-                     op: BinaryOp::I32Add,
-                  })
-                  .instr(LocalSet { local: ptr })
-                  .instr(LocalGet { local: len })
-                  .instr(Const {
-                     value: Value::I32(1),
-                  })
-                  .instr(Binop {
-                     op: BinaryOp::I32Sub,
-                  })
-                  .instr(LocalSet { local: len })
+                  .local_get(ptr)
+                  .i32_const(1)
+                  .binop(BinaryOp::I32Add)
+                  .local_set(ptr)
+                  .local_get(len)
+                  .i32_const(1)
+                  .binop(BinaryOp::I32Sub)
+                  .local_set(len)
                   .instr(Br { block: walk_id });
             });
          });
 
-      let func = builder.finish(vec![ptr, len, seed], &mut module.funcs);
+      let mut arguments = vec![ptr, len, seed];
+
+      if let (Some(markers), Some((expected, hash, _, latch))) = (pool, integrity) {
+         markers.fold_integrity(&mut builder.func_body(), hash, expected, latch);
+         arguments.push(expected);
+      }
+
+      let func = builder.finish(arguments, &mut module.funcs);
       Self { func, names }
    }
 
@@ -177,7 +193,13 @@ impl Decryptor {
    /// Relocatable data must use the same base global as its data segment so
    /// decryption follows the loader's placement.
    #[inline]
-   pub fn call(&self, segment: &analysis::Segment, seed: NonZeroU64, out: &mut Vec<Instr>) {
+   pub fn call(
+      &self,
+      segment: &analysis::Segment,
+      seed: NonZeroU64,
+      checksum: Option<i32>,
+      out: &mut Vec<Instr>,
+   ) {
       match segment.anchor {
          analysis::Anchor::Absolute(start) => {
             out.push(
@@ -225,6 +247,16 @@ impl Decryptor {
          }
          .into(),
       );
+
+      if let Some(expected) = checksum {
+         out.push(
+            Const {
+               value: Value::I32(expected),
+            }
+            .into(),
+         );
+      }
+
       out.push(ir::Call { func: self.func }.into());
    }
 
@@ -235,6 +267,7 @@ impl Decryptor {
       module: &mut walrus::Module,
       segment: &analysis::Segment,
       seed: NonZeroU64,
+      checksum: Option<i32>,
    ) -> walrus::FunctionId {
       let done = module.globals.add_local(
          walrus::ValType::I32,
@@ -252,7 +285,7 @@ impl Decryptor {
       }
 
       let mut body = Vec::new();
-      self.call(segment, seed, &mut body);
+      self.call(segment, seed, checksum, &mut body);
 
       builder
          .func_body()
@@ -276,5 +309,22 @@ impl Decryptor {
          );
 
       builder.finish(Vec::new(), &mut module.funcs)
+   }
+}
+
+/// Must match the xorshift sequence in [`crate::rng::KeyStream`].
+fn stream_step(body: &mut InstrSeqBuilder<'_>, state: LocalId) {
+   for (shift, op) in [
+      (13, BinaryOp::I64Shl),
+      (7, BinaryOp::I64ShrU),
+      (17, BinaryOp::I64Shl),
+   ] {
+      body
+         .local_get(state)
+         .local_get(state)
+         .i64_const(shift)
+         .binop(op)
+         .binop(BinaryOp::I64Xor)
+         .local_set(state);
    }
 }
