@@ -79,11 +79,16 @@ enum Command {
       #[pound(long)]
       report_functions: bool,
       /// Module to rewrite.
-      input:            PathBuf,
+      #[pound(parse = "(|value: &str| Ok::<_, String>(Box::new(PathBuf::from(value))))")]
+      input:            Box<PathBuf>,
 
-      #[pound(short, long)]
+      #[pound(
+         short,
+         long,
+         parse = "(|value: &str| Ok::<_, String>(Box::new(PathBuf::from(value))))"
+      )]
       /// Where the rewritten module gets written.
-      output: PathBuf,
+      output: Box<PathBuf>,
 
       /// Fixing the seed makes the whole transformation reproducible.
       #[pound(long, default = "0")]
@@ -96,6 +101,11 @@ enum Command {
       /// Fold ciphertext and integer global initializers into marker state.
       #[pound(long)]
       integrity: bool,
+
+      /// Read-only input segment index, zero-based and repeatable. Requires
+      /// --integrity.
+      #[pound(long)]
+      readonly_segment: Vec<usize>,
 
       /// Decrypt every segment up front instead of on first use.
       #[pound(long)]
@@ -141,6 +151,10 @@ enum Command {
       /// Rewrite instruction sequences as `br_table` dispatch loops.
       #[pound(long)]
       flatten: bool,
+
+      /// Advance dispatch encodings during execution. Requires --flatten.
+      #[pound(long)]
+      evolve_dispatch: bool,
 
       /// Percentage of eligible sequences flattened.
       #[pound(long, default = "70", parse = "str::parse")]
@@ -209,6 +223,7 @@ fn main() -> Result<()> {
          seed,
          no_data_enc,
          integrity,
+         readonly_segment,
          eager,
          no_markers,
          evolve_pool,
@@ -220,6 +235,7 @@ fn main() -> Result<()> {
          opaque,
          opaque_ratio,
          flatten,
+         evolve_dispatch,
          flatten_ratio,
          max_regions,
          check,
@@ -228,25 +244,23 @@ fn main() -> Result<()> {
          process_memory,
          debug_names,
       } => {
-         let pass_functions = [
-            (CodePass::Indirect, call_function),
-            (CodePass::Markers, marker_function),
-            (CodePass::Flatten, flatten_function),
-            (CodePass::Opaque, opaque_function),
-         ]
-         .into_iter()
-         .filter(|entry| !entry.1.is_empty())
-         .collect::<BTreeMap<_, _>>();
-
          let config = Config {
             functions: function,
-            pass_functions,
+            pass_functions: [
+               (CodePass::Indirect, call_function),
+               (CodePass::Markers, marker_function),
+               (CodePass::Flatten, flatten_function),
+               (CodePass::Opaque, opaque_function),
+            ]
+            .into_iter()
+            .filter(|entry| !entry.1.is_empty())
+            .collect::<BTreeMap<_, _>>(),
             include_callees,
             exclude_reachable,
             seed,
             data_enc: !no_data_enc,
             integrity,
-            readonly_segments: BTreeSet::new(),
+            readonly_segments: readonly_segment.into_iter().collect::<BTreeSet<_>>(),
             lazy: !eager,
             markers: !no_markers,
             evolve_pool,
@@ -258,7 +272,7 @@ fn main() -> Result<()> {
             opaque,
             opaque_ratio,
             flatten,
-            evolve_dispatch: false,
+            evolve_dispatch,
             flatten_ratio,
             max_regions,
             debug_names,
@@ -317,6 +331,10 @@ fn run(
    fuel: Option<u64>,
    limits: worker::Limits,
 ) -> Result<()> {
+   if config.evolve_dispatch && !config.flatten {
+      bail!("--evolve-dispatch requires --flatten");
+   }
+
    let input =
       fs::read(input_path).wrap_err_with(|| format!("reading {}", input_path.display()))?;
 
