@@ -402,18 +402,18 @@ dependencies = [
 
 [[package]]
 name = "pound"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "883b9b1c81ed84238d23114722eecefd840359f4729b2873dfaa59cde5fcf96e"
+checksum = "c86a0567fb5ffd1e933983f6baef4e557d0cc2bf3541b26c169bbb8099889487"
 dependencies = [
  "pound-derive",
 ]
 
 [[package]]
 name = "pound-derive"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40bb712451d467a9de38f5c0bf7e5de000f1357c13e0731df20b6a101a43e248"
+checksum = "e1ea8a0689abf825dc184168cda08d14ff35a451cea2650464400932589cf4cf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -446,9 +446,9 @@ checksum = "b74b56ffa8bb2830709a538c2cbcae9aa062db0d2a42563bfb09bdaae44020eb"
 
 [[package]]
 name = "rustix"
-version = "1.1.4"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
 dependencies = [
  "bitflags",
  "errno",
@@ -653,7 +653,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vela-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "brotli",
  "color-eyre",
