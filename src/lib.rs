@@ -21,6 +21,7 @@ mod analysis;
 /// Placement checks for shared imported memories and tables.
 mod audit;
 pub mod config;
+pub mod delivery;
 /// Runtime decryption helpers and Wasm opcode conversions.
 mod emit;
 /// Arithmetic expressions built from marker globals.
