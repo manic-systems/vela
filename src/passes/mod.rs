@@ -10,3 +10,4 @@ pub mod indirect;
 pub mod markers;
 /// Never taken branches at sequence entries.
 pub mod opaque;
+pub mod readonly;

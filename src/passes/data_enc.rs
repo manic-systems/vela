@@ -147,6 +147,13 @@ fn plan_staging(rewriter: &mut Rewriter<'_>) {
       let eager_reasons = [
          (EagerReason::Requested, !rewriter.config.lazy),
          (
+            EagerReason::ReadOnly,
+            rewriter
+               .config
+               .readonly_segments
+               .contains(&segment_indices[&segment.id]),
+         ),
+         (
             EagerReason::UnresolvedMemory,
             !references.unresolved.is_empty(),
          ),

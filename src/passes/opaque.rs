@@ -1,4 +1,5 @@
 use walrus::{
+   FunctionId,
    FunctionKind,
    ir,
 };
@@ -15,7 +16,7 @@ use crate::{
 /// Only entries without block parameters are eligible, so insertion starts
 /// with an empty operand stack and doesn't need a stack analysis.
 #[inline]
-pub fn run(rewriter: &mut Rewriter<'_>) {
+pub fn run(rewriter: &mut Rewriter<'_>, readonly: Option<FunctionId>) {
    let module = &mut rewriter.module;
    let rng = &mut rewriter.rng;
    let config = rewriter.config;
@@ -49,6 +50,12 @@ pub fn run(rewriter: &mut Rewriter<'_>) {
          };
 
          let mut lowered = Vec::new();
+
+         if let Some(check) = readonly {
+            lowered.push(ir::Call { func: check }.into());
+            report.readonly_checks += 1;
+         }
+
          pool.lower(&expr, &mut lowered);
 
          let FunctionKind::Local(ref mut func_mut) = module.funcs.get_mut(id).kind else {

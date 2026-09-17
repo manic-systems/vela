@@ -100,6 +100,10 @@ pub enum TransformError {
    DataPlacement,
    #[error("integrity requires marker rewriting")]
    IntegrityPasses,
+   #[error("read-only segment checks require integrity")]
+   ReadOnlyIntegrity,
+   #[error("read-only segment #{0} must be nonempty and active with a supported, stable address")]
+   ReadOnlySegment(usize),
    #[error("integrity requires covered data or globals and at least one rewritten marker")]
    IntegrityCoverage,
    #[error("output violates placement rules\n{}", .0.join("\n"))]
@@ -178,7 +182,12 @@ impl<'config> Rewriter<'config> {
 
       let mut rng = Rng::new(seed);
       let segments = analysis::segments(&module);
-      if config.data_enc && !segments.is_empty() && !analysis::disjoint(&module) {
+      passes::readonly::validate(&module, config, &segments)?;
+
+      if (config.data_enc || !config.readonly_segments.is_empty())
+         && !segments.is_empty()
+         && !analysis::disjoint(&module)
+      {
          return Err(TransformError::DataPlacement);
       }
 
@@ -227,6 +236,7 @@ impl<'config> Rewriter<'config> {
 
    /// Runs the enabled passes, checks placement and emits the module.
    fn run(mut self) -> Result<(Vec<u8>, Report), TransformError> {
+      let readonly = passes::readonly::run(&mut self)?;
       let eager = if self.config.data_enc {
          passes::data_enc::run(&mut self)
       } else {
@@ -249,15 +259,17 @@ impl<'config> Rewriter<'config> {
       // The seed helper must remain untouched because it establishes the
       // values marker expressions use.
       if self.config.markers {
-         passes::markers::run(&mut self);
+         passes::markers::run(&mut self, readonly);
       }
 
       if self.config.opaque {
-         passes::opaque::run(&mut self);
+         passes::opaque::run(&mut self, readonly);
       }
 
       if self.config.integrity
-         && ((self.report.bytes_integrity == 0 && self.report.globals_integrity == 0)
+         && ((self.report.bytes_integrity == 0
+            && self.report.bytes_readonly == 0
+            && self.report.globals_integrity == 0)
             || self.report.markers_rewritten == 0)
       {
          return Err(TransformError::IntegrityCoverage);

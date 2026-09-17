@@ -212,6 +212,7 @@ pub struct Config {
    pub seed:              u64,
    pub data_enc:          bool,
    pub integrity:         bool,
+   pub readonly_segments: BTreeSet<usize>,
    /// Decrypt eligible segments on first use. Targets of pointers stored in
    /// data stay eager because the code scan can't tell when they'll be read.
    pub lazy:              bool,
@@ -253,6 +254,7 @@ impl Default for Config {
          seed:              0,
          data_enc:          true,
          integrity:         false,
+         readonly_segments: BTreeSet::new(),
          lazy:              true,
          markers:           true,
          evolve_pool:       false,
@@ -410,6 +412,7 @@ pub struct UnresolvedUse {
 #[non_exhaustive]
 pub enum EagerReason {
    Requested,
+   ReadOnly,
    UnresolvedMemory,
    Relocatable,
    DataPointer,
@@ -421,6 +424,7 @@ impl fmt::Display for EagerReason {
    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
       f.write_str(match *self {
          Self::Requested => "eager requested",
+         Self::ReadOnly => "read-only integrity checks",
          Self::UnresolvedMemory => "unresolved memory use",
          Self::Relocatable => "relocatable placement",
          Self::DataPointer => "pointer stored in data",
@@ -498,6 +502,9 @@ pub struct Report {
    pub unresolved_memory_uses:     usize,
    pub bytes_encrypted:            usize,
    pub bytes_integrity:            usize,
+   pub readonly_segments:          Vec<usize>,
+   pub bytes_readonly:             usize,
+   pub readonly_checks:            usize,
    pub globals_integrity:          usize,
    pub globals_total:              usize,
    pub bytes_eager:                usize,
@@ -534,6 +541,16 @@ impl fmt::Display for Report {
             f,
             "integrity {} encrypted bytes and {}/{} initial globals folded into markers",
             self.bytes_integrity, self.globals_integrity, self.globals_total
+         )?;
+      }
+
+      if !self.readonly_segments.is_empty() {
+         writeln!(
+            f,
+            "readonly  {} declared segments, {} bytes checked at {} expression sites",
+            self.readonly_segments.len(),
+            self.bytes_readonly,
+            self.readonly_checks
          )?;
       }
 

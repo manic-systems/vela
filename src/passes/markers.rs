@@ -1,4 +1,5 @@
 use walrus::{
+   FunctionId,
    FunctionKind,
    ir,
 };
@@ -16,7 +17,7 @@ use crate::{
 /// Evaluate each expression against the mixed pool before emission. Keep the
 /// original constant if the result doesn't match.
 #[inline]
-pub fn run(rewriter: &mut Rewriter<'_>) {
+pub fn run(rewriter: &mut Rewriter<'_>, readonly: Option<FunctionId>) {
    let module = &mut rewriter.module;
    let rng = &mut rewriter.rng;
    let config = rewriter.config;
@@ -71,6 +72,12 @@ pub fn run(rewriter: &mut Rewriter<'_>) {
             };
 
             let mut lowered = Vec::new();
+
+            if let Some(check) = readonly {
+               lowered.push(ir::Call { func: check }.into());
+               report.readonly_checks += 1;
+            }
+
             pool.lower(&expr, &mut lowered);
 
             let FunctionKind::Local(ref mut func_mut) = module.funcs.get_mut(id).kind else {

@@ -1,5 +1,8 @@
 use std::{
-   collections::BTreeMap,
+   collections::{
+      BTreeMap,
+      BTreeSet,
+   },
    env,
    fs,
    path::{
@@ -243,6 +246,7 @@ fn main() -> Result<()> {
             seed,
             data_enc: !no_data_enc,
             integrity,
+            readonly_segments: BTreeSet::new(),
             lazy: !eager,
             markers: !no_markers,
             evolve_pool,
