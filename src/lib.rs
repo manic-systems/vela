@@ -162,8 +162,17 @@ impl<'config> Rewriter<'config> {
       if config.data_enc && !segments.is_empty() && !analysis::disjoint(&module) {
          return Err(TransformError::DataPlacement);
       }
+
       let references = References::analyze(&module, &segments);
-      let pool = Pool::build(&mut module, &mut rng, config.pool_size, config.debug_names);
+
+      let pool = Pool::build(
+         &mut module,
+         &mut rng,
+         config.pool_size,
+         config.debug_names,
+         config.evolve_pool,
+      );
+
       Ok(Self {
          functions,
          dispatch_marker,
@@ -252,5 +261,6 @@ impl<'config> Rewriter<'config> {
       self.module.start = Some(init);
       self.generated.insert(init);
       self.generated.insert(self.pool.seed_func());
+      self.generated.extend(self.pool.readers());
    }
 }

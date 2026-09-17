@@ -215,6 +215,7 @@ pub struct Config {
    /// data stay eager because the code scan can't tell when they'll be read.
    pub lazy:              bool,
    pub markers:           bool,
+   pub evolve_pool:       bool,
    /// Recursion depth of each marker expression. Higher depths add more
    /// arithmetic and global reads, up to a depth of 64.
    pub marker_depth:      MarkerDepth,
@@ -251,6 +252,7 @@ impl Default for Config {
          data_enc:          true,
          lazy:              true,
          markers:           true,
+         evolve_pool:       false,
          marker_depth:      MarkerDepth(2),
          pool_size:         PoolSize(8),
          markers_all:       false,

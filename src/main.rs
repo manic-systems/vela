@@ -98,6 +98,10 @@ enum Command {
       #[pound(long)]
       no_markers: bool,
 
+      /// Advance encoded pool state without changing marker results.
+      #[pound(long)]
+      evolve_pool: bool,
+
       /// Recursion depth of each synthesised marker expression.
       #[pound(long, default = "2", parse = "str::parse")]
       marker_depth: MarkerDepth,
@@ -106,8 +110,7 @@ enum Command {
       #[pound(long, default = "8", parse = "str::parse")]
       pool_size: PoolSize,
 
-      /// Rewrite every i32 constant, not just data addresses and dispatch
-      /// indices.
+      /// Rewrite all i32 constants, including non-address operands.
       #[pound(long)]
       markers_all: bool,
 
@@ -201,6 +204,7 @@ fn main() -> Result<()> {
          no_data_enc,
          eager,
          no_markers,
+         evolve_pool,
          marker_depth,
          pool_size,
          markers_all,
@@ -239,6 +243,7 @@ fn main() -> Result<()> {
             data_enc: !no_data_enc,
             lazy: !eager,
             markers: !no_markers,
+            evolve_pool,
             marker_depth,
             pool_size,
             markers_all,
