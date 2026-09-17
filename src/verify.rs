@@ -79,7 +79,7 @@ pub enum Error {
       #[source]
       source: wasmi::Error,
    },
-   #[error("scenario contains no calls or memory reads")]
+   #[error("scenario contains no calls or nonempty memory reads")]
    EmptyScenario,
    #[error("memory export {name} is unavailable in {side} module")]
    MissingMemory { side: ModuleSide, name: String },
@@ -524,7 +524,7 @@ pub(crate) fn compare(
 ///
 /// Fails for missing exports, invalid arguments or memory ranges, unsupported
 /// results, failed instantiation, exhausted budgets, incomplete host scripts,
-/// or a scenario without calls or reads.
+/// all-trap agreement without observed bytes, or no calls or nonempty reads.
 #[inline]
 #[expect(
    clippy::pub_with_shorthand,
@@ -536,12 +536,16 @@ pub(crate) fn compare_scenario(
    actions: &[Action],
    host: &HostConfig,
 ) -> Result<Vec<Comparison>, Error> {
-   if !actions
-      .iter()
-      .any(|action| !matches!(*action, Action::WriteMemory { .. }))
-   {
+   if !actions.iter().any(|action| {
+      match *action {
+         Action::Call { .. } => true,
+         Action::ReadMemory { len, .. } => len > 0,
+         Action::WriteMemory { .. } => false,
+      }
+   }) {
       return Err(Error::EmptyScenario);
    }
+
    let mut original = Execution::new(before, ModuleSide::Original, host)?;
    let mut rewritten = Execution::new(after, ModuleSide::Rewritten, host)?;
    let original_instance = original.instantiate()?;
@@ -583,6 +587,24 @@ pub(crate) fn compare_scenario(
    }
    original.finish_script()?;
    rewritten.finish_script()?;
+
+   if comparisons.iter().all(|comparison| {
+      match *comparison {
+         Comparison::Export {
+            before: CallOutcome::Trapped(before_trap),
+            after: CallOutcome::Trapped(after_trap),
+            ..
+         } => before_trap == after_trap,
+         Comparison::Bytes {
+            before: ref before_bytes,
+            after: ref after_bytes,
+            ..
+         } => before_bytes.is_empty() && after_bytes.is_empty(),
+         Comparison::Export { .. } | Comparison::Memory { .. } => false,
+      }
+   }) {
+      return Err(Error::AllTrapped);
+   }
 
    comparisons.push(Comparison::Memory {
       before: original.memory_digest(original_instance),
