@@ -157,14 +157,10 @@ impl Pool {
          .binop(BinaryOp::I32Or)
          .global_set(latch);
 
-      for (&(global, reader), rotation) in self.slots.iter().zip((0_i32..32_i32).cycle()) {
+      if let Some(&(global, reader)) = self.slots.first() {
          body
             .instr(GlobalGet { global })
             .instr(LocalGet { local: delta });
-
-         if rotation != 0_i32 {
-            body.i32_const(rotation).binop(BinaryOp::I32Rotl);
-         }
 
          if reader.is_some() {
             body.unop(UnaryOp::I64ExtendUI32).binop(BinaryOp::I64Xor);

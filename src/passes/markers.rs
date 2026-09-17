@@ -66,7 +66,8 @@ pub fn run(rewriter: &mut Rewriter<'_>, readonly: Option<FunctionId>) {
             .collect::<Vec<(usize, i32, bool)>>();
 
          for (at, value, dispatch) in chosen.into_iter().rev() {
-            let Some(expr) = synth.checked(rng, value, config.marker_depth.get()) else {
+            let Some(expr) = synth.checked(rng, value, config.marker_depth.get(), config.integrity)
+            else {
                report.markers_skipped += 1;
                continue;
             };

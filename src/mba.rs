@@ -94,12 +94,12 @@ impl<'pool> Synth<'pool> {
       clippy::cast_possible_wrap,
       reason = "below(31) + 1 yields 1..=31 which fits in i32"
    )]
-   pub fn build(&self, rng: &mut rng::Rng, target: i32, depth: u32) -> Expr {
-      if depth == 0 || self.pool.is_empty() {
+   pub fn build(&self, rng: &mut rng::Rng, target: i32, depth: u32, first_slot: usize) -> Expr {
+      if depth == 0 || first_slot >= self.pool.len() {
          return Expr::Const(target);
       }
 
-      let slot = rng.below(self.pool.len());
+      let slot = first_slot + rng.below(self.pool.len() - first_slot);
       let value = self.pool[slot];
       let global = Expr::Global(slot);
 
@@ -108,7 +108,7 @@ impl<'pool> Synth<'pool> {
          1 => (BinKind::Add, target.wrapping_sub(value)),
          2 => (BinKind::Sub, target.wrapping_add(value)),
          3 => {
-            let other = rng.below(self.pool.len());
+            let other = first_slot + rng.below(self.pool.len() - first_slot);
             let combined = value.wrapping_mul(self.pool[other]);
             return self.wrap(
                rng,
@@ -120,10 +120,11 @@ impl<'pool> Synth<'pool> {
                ),
                target ^ combined,
                depth,
+               first_slot,
             );
          },
          4 => {
-            let other = rng.below(self.pool.len());
+            let other = first_slot + rng.below(self.pool.len() - first_slot);
             let combined = value | self.pool[other];
             return self.wrap(
                rng,
@@ -131,6 +132,7 @@ impl<'pool> Synth<'pool> {
                Expr::Bin(BinKind::Or, Box::new(global), Box::new(Expr::Global(other))),
                target ^ combined,
                depth,
+               first_slot,
             );
          },
          _ => {
@@ -146,11 +148,12 @@ impl<'pool> Synth<'pool> {
                ),
                target ^ rotated,
                depth,
+               first_slot,
             );
          },
       };
 
-      let rest = self.build(rng, residual, depth - 1);
+      let rest = self.build(rng, residual, depth - 1, first_slot);
       match kind {
          // `target - value + value`, so the global is the right operand of the subtraction.
          BinKind::Sub => Expr::Bin(BinKind::Sub, Box::new(rest), Box::new(global)),
@@ -165,16 +168,50 @@ impl<'pool> Synth<'pool> {
 
    /// Rebuilds the residual side of a two-global template.
    #[inline]
-   fn wrap(&self, rng: &mut rng::Rng, kind: BinKind, lhs: Expr, residual: i32, depth: u32) -> Expr {
-      let rest = self.build(rng, residual, depth - 1);
+   fn wrap(
+      &self,
+      rng: &mut rng::Rng,
+      kind: BinKind,
+      lhs: Expr,
+      residual: i32,
+      depth: u32,
+      first_slot: usize,
+   ) -> Expr {
+      let rest = self.build(rng, residual, depth - 1, first_slot);
       Expr::Bin(kind, Box::new(lhs), Box::new(rest))
    }
 
    /// Returns an expression only if it reads the pool and evaluates to
    /// `target`. Otherwise the caller can keep the original constant.
    #[inline]
-   pub fn checked(&self, rng: &mut rng::Rng, target: i32, depth: u32) -> Option<Expr> {
-      let expr = self.build(rng, target, depth);
+   pub fn checked(
+      &self,
+      rng: &mut rng::Rng,
+      target: i32,
+      depth: u32,
+      integrity: bool,
+   ) -> Option<Expr> {
+      if depth == 0 {
+         return None;
+      }
+
+      let expr = if integrity {
+         let value = *self.pool.first()?;
+         let (kind, residual) = match rng.below(3) {
+            0 => (BinKind::Xor, target ^ value),
+            1 => (BinKind::Add, target.wrapping_sub(value)),
+            _ => (BinKind::Sub, value.wrapping_sub(target)),
+         };
+
+         Expr::Bin(
+            kind,
+            Box::new(Expr::Global(0)),
+            Box::new(self.build(rng, residual, depth - 1, 1)),
+         )
+      } else {
+         self.build(rng, target, depth, 0)
+      };
+
       (expr.eval(self.pool) == target && expr.global_reads() > 0).then_some(expr)
    }
 
