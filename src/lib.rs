@@ -28,6 +28,7 @@ mod mba;
 mod passes;
 /// Marker globals and their startup mixing code.
 mod pool;
+pub mod prepare;
 /// Proven memory uses by input instruction location.
 mod references;
 /// Seeded randomness and the segment encryption byte stream.
@@ -72,6 +73,7 @@ use crate::{
       Report,
    },
    pool::Pool,
+   prepare::Prepared,
    references::solver::References,
    rng::Rng,
 };
@@ -113,7 +115,7 @@ pub enum TransformError {
 /// reachability.
 #[inline]
 pub fn transform(wasm: &[u8], config: &Config) -> Result<(Vec<u8>, Report), TransformError> {
-   Rewriter::new(wasm, config)?.run()
+   Rewriter::new(wasm, config, config.seed, None)?.run()
 }
 
 /// Shared state for one module rewrite.
@@ -143,7 +145,12 @@ struct Rewriter<'config> {
 
 impl<'config> Rewriter<'config> {
    /// Parses the input and prepares shared rewrite state.
-   fn new(wasm: &[u8], config: &'config Config) -> Result<Self, TransformError> {
+   fn new(
+      wasm: &[u8],
+      config: &'config Config,
+      seed: u64,
+      prepared: Option<&Prepared>,
+   ) -> Result<Self, TransformError> {
       if config.data_integrity && (!config.data_enc || !config.markers) {
          return Err(TransformError::IntegrityPasses);
       }
@@ -163,15 +170,21 @@ impl<'config> Rewriter<'config> {
          return Err(TransformError::InputTooLarge);
       }
       let dispatch_marker = ir::InstrLocId::new(location);
-      let functions = selection::resolve(&module, config)?;
+      let functions = prepared.map_or_else(
+         || selection::resolve(&module, config),
+         |plan| Ok(plan.functions(&module)),
+      )?;
 
-      let mut rng = Rng::new(config.seed);
+      let mut rng = Rng::new(seed);
       let segments = analysis::segments(&module);
       if config.data_enc && !segments.is_empty() && !analysis::disjoint(&module) {
          return Err(TransformError::DataPlacement);
       }
 
-      let references = References::analyze(&module, &segments);
+      let references = prepared.map_or_else(
+         || References::analyze(&module, &segments),
+         |plan| plan.references(&module),
+      );
 
       let pool = Pool::build(
          &mut module,

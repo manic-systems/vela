@@ -295,7 +295,7 @@ impl fmt::Display for FlattenRejection {
    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FunctionReport {
    pub index:                      usize,
    pub name:                       Option<String>,
