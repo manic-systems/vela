@@ -232,6 +232,7 @@ pub struct Config {
    pub opaque_ratio:      Percentage,
    /// Rewrite instruction sequences as `br_table` dispatch loops.
    pub flatten:           bool,
+   pub evolve_dispatch:   bool,
    /// Percentage of eligible sequences flattened.
    pub flatten_ratio:     Percentage,
    /// Upper bound on regions a single sequence is cut into.
@@ -263,6 +264,7 @@ impl Default for Config {
          opaque:            false,
          opaque_ratio:      Percentage(20),
          flatten:           false,
+         evolve_dispatch:   false,
          flatten_ratio:     Percentage(70),
          max_regions:       6,
          debug_names:       false,
@@ -307,6 +309,7 @@ pub struct FunctionReport {
    pub markers_rewritten:          usize,
    pub dispatch_markers_rewritten: usize,
    pub seqs_flattened:             usize,
+   pub seqs_evolving:              usize,
    pub flatten_regions:            usize,
    pub flatten_refusals:           BTreeMap<FlattenRejection, usize>,
    pub opaque_inserted:            usize,
@@ -340,12 +343,13 @@ impl fmt::Display for FunctionReport {
          .join(", ");
       write!(
          f,
-         " selected {selected}, calls {}, markers {} ({} dispatch), flattened {} into {} regions, \
-          opaque {}",
+         " selected {selected}, calls {}, markers {} ({} dispatch), flattened {} ({} evolving) \
+          into {} regions, opaque {}",
          self.calls_promoted,
          self.markers_rewritten,
          self.dispatch_markers_rewritten,
          self.seqs_flattened,
+         self.seqs_evolving,
          self.flatten_regions,
          self.opaque_inserted
       )?;
@@ -505,6 +509,7 @@ pub struct Report {
    pub calls_promoted:             usize,
    pub opaque_inserted:            usize,
    pub seqs_flattened:             usize,
+   pub seqs_evolving:              usize,
    pub flatten_regions:            usize,
    pub seqs_unflattenable:         usize,
    pub pool_size:                  usize,
@@ -557,8 +562,8 @@ impl fmt::Display for Report {
       )?;
       write!(
          f,
-         "flatten   {} sequences into {} dispatch regions, {} not safely splittable",
-         self.seqs_flattened, self.flatten_regions, self.seqs_unflattenable
+         "flatten   {} sequences into {} dispatch regions, {} evolving, {} not safely splittable",
+         self.seqs_flattened, self.flatten_regions, self.seqs_evolving, self.seqs_unflattenable
       )
    }
 }

@@ -87,6 +87,7 @@ fn catalog(module: &walrus::Module) -> BTreeMap<FunctionId, FunctionReport> {
          markers_rewritten: 0,
          dispatch_markers_rewritten: 0,
          seqs_flattened: 0,
+         seqs_evolving: 0,
          flatten_regions: 0,
          flatten_refusals: BTreeMap::new(),
          opaque_inserted: 0,

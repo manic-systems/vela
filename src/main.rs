@@ -254,6 +254,7 @@ fn main() -> Result<()> {
             opaque,
             opaque_ratio,
             flatten,
+            evolve_dispatch: false,
             flatten_ratio,
             max_regions,
             debug_names,

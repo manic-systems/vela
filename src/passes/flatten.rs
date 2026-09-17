@@ -4,6 +4,8 @@ use std::{
 };
 
 use walrus::{
+   ConstExpr,
+   FunctionBuilder,
    FunctionId,
    FunctionKind,
    LocalId,
@@ -41,6 +43,8 @@ pub fn run(rewriter: &mut Rewriter<'_>) {
    let dispatch_marker = rewriter.dispatch_marker;
    let report = &mut rewriter.report;
    let functions = &mut rewriter.functions;
+   let mut key = None;
+
    for id in analysis::local_func_ids(module) {
       let Some(function) = functions
          .get_mut(&id)
@@ -70,7 +74,41 @@ pub fn run(rewriter: &mut Rewriter<'_>) {
 
          match Plan::build(module, id, seq, rng, config) {
             Ok(plan) => {
-               let regions = plan.apply(module, rng, dispatch_marker);
+               let source = config.evolve_dispatch.then(|| {
+                  let helper = *key.get_or_insert_with(|| {
+                     let global = module.globals.add_local(
+                        ValType::I32,
+                        true,
+                        false,
+                        ConstExpr::Value(ir::Value::I32(rng.next_i32())),
+                     );
+                     let mut builder =
+                        FunctionBuilder::new(&mut module.types, &[], &[ValType::I32]);
+
+                     if config.debug_names {
+                        builder.name("vela_dispatch_key".to_owned());
+                     }
+
+                     builder
+                        .func_body()
+                        .global_get(global)
+                        .i32_const(rng.next_i32() | 1)
+                        .binop(ir::BinaryOp::I32Add)
+                        .global_set(global)
+                        .global_get(global)
+                        .i32_const(rng.next_i32() & 31)
+                        .binop(ir::BinaryOp::I32Rotl);
+
+                     builder.finish(Vec::new(), &mut module.funcs)
+                  });
+
+                  rewriter.generated.insert(helper);
+                  report.seqs_evolving += 1;
+                  function.seqs_evolving += 1;
+                  helper
+               });
+
+               let regions = plan.apply(module, rng, dispatch_marker, source);
                report.seqs_flattened += 1;
                report.flatten_regions += regions;
                function.seqs_flattened += 1;
@@ -93,11 +131,10 @@ fn refuse(report: &mut Report, function: &mut FunctionReport, reason: FlattenRej
 fn tail(
    logical: usize,
    count: usize,
-   state: LocalId,
+   mut next: Vec<(ir::Instr, ir::InstrLocId)>,
    result: Option<LocalId>,
    dispatch: ir::InstrSeqId,
    exit: ir::InstrSeqId,
-   dispatch_marker: ir::InstrLocId,
 ) -> Vec<(ir::Instr, ir::InstrLocId)> {
    if logical + 1 == count {
       let mut last = Vec::new();
@@ -108,20 +145,8 @@ fn tail(
       return last;
    }
 
-   vec![
-      (
-         ir::Const {
-            value: ir::Value::I32(i32::try_from(logical).unwrap_or(i32::MAX).saturating_add(1)),
-         }
-         .into(),
-         dispatch_marker,
-      ),
-      (
-         ir::LocalSet { local: state }.into(),
-         ir::InstrLocId::default(),
-      ),
-      (ir::Br { block: dispatch }.into(), ir::InstrLocId::default()),
-   ]
+   next.push((ir::Br { block: dispatch }.into(), ir::InstrLocId::default()));
+   next
 }
 
 /// Generated control instructions have no original source location.
@@ -167,19 +192,50 @@ struct Plan {
 
 impl Plan {
    /// Returns the number of regions the sequence was split into.
-   fn apply(self, module: &mut Module, rng: &mut Rng, dispatch_marker: ir::InstrLocId) -> usize {
+   fn apply(
+      self,
+      module: &mut Module,
+      rng: &mut Rng,
+      dispatch_marker: ir::InstrLocId,
+      key: Option<FunctionId>,
+   ) -> usize {
       let state = module.locals.add(ValType::I32);
+      let epoch = key.map(|source| (module.locals.add(ValType::I32), source));
       let result = self.result.map(|ty| module.locals.add(ty));
+      let encode = |value: i32| {
+         let mut instructions = Vec::new();
+
+         if let Some((local, func)) = epoch {
+            instructions.extend(flat([
+               ir::Call { func }.into(),
+               ir::LocalTee { local }.into(),
+            ]));
+         }
+
+         instructions.push((
+            ir::Const {
+               value: ir::Value::I32(value),
+            }
+            .into(),
+            dispatch_marker,
+         ));
+
+         if epoch.is_some() {
+            instructions.extend(flat([ir::Binop {
+               op: ir::BinaryOp::I32Xor,
+            }
+            .into()]));
+         }
+
+         instructions.extend(flat([ir::LocalSet { local: state }.into()]));
+         instructions
+      };
 
       let func = module.funcs.get_mut(self.func).kind.unwrap_local_mut();
-
-      let mut regions = split(
-         take(func.builder_mut().instr_seq(self.seq).instrs_mut()),
-         &self.cuts,
-      );
+      let builder = func.builder_mut();
+      let mut regions = split(take(builder.instr_seq(self.seq).instrs_mut()), &self.cuts);
       let count = regions.len();
 
-      let builder = func.builder_mut();
       let exit = builder
          .dangling_instr_seq(ir::InstrSeqType::Simple(None))
          .id();
@@ -213,14 +269,14 @@ impl Plan {
          })
          .collect::<Box<[ir::InstrSeqId]>>();
 
-      builder.instr_seq(cases[0]).instrs_mut().extend(flat([
-         ir::LocalGet { local: state }.into(),
-         ir::BrTable {
-            blocks:  table,
-            default: exit,
-         }
-         .into(),
-      ]));
+      let mut selector = builder.instr_seq(cases[0]);
+      selector.local_get(state);
+
+      if let Some((local, _)) = epoch {
+         selector.local_get(local).binop(ir::BinaryOp::I32Xor);
+      }
+
+      selector.br_table(table, exit);
 
       // A branch to `cases[level]` exits that block and enters the region
       // placed after it. The outermost region sits directly in the
@@ -233,10 +289,9 @@ impl Plan {
             dispatch
          };
 
-         let mut body = vec![(
-            ir::Block { seq: cases[level] }.into(),
-            ir::InstrLocId::default(),
-         )];
+         let mut container_body = builder.instr_seq(container);
+         container_body.instr(ir::Block { seq: cases[level] });
+         let body = container_body.instrs_mut();
          #[expect(
             clippy::expect_used,
             reason = "a region missing here means a logical index was visited twice, a real bug \
@@ -246,35 +301,17 @@ impl Plan {
          body.extend(tail(
             logical,
             count,
-            state,
+            encode(i32::try_from(logical).unwrap_or(i32::MAX).saturating_add(1)),
             result,
             dispatch,
             exit,
-            dispatch_marker,
          ));
-
-         builder.instr_seq(container).instrs_mut().extend(body);
       }
 
-      builder
-         .instr_seq(exit)
-         .instrs_mut()
-         .extend(flat([ir::Loop { seq: dispatch }.into()]));
+      builder.instr_seq(exit).instr(ir::Loop { seq: dispatch });
 
-      let mut head = vec![
-         (
-            ir::Const {
-               value: ir::Value::I32(0),
-            }
-            .into(),
-            dispatch_marker,
-         ),
-         (
-            ir::LocalSet { local: state }.into(),
-            ir::InstrLocId::default(),
-         ),
-         (ir::Block { seq: exit }.into(), ir::InstrLocId::default()),
-      ];
+      let mut head = encode(0_i32);
+      head.push((ir::Block { seq: exit }.into(), ir::InstrLocId::default()));
       if let Some(local) = result {
          head.push((ir::LocalGet { local }.into(), ir::InstrLocId::default()));
       }
