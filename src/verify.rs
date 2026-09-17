@@ -194,6 +194,22 @@ pub struct ImportCall {
    pub name:      String,
    pub arguments: Vec<Value>,
    pub results:   Vec<Value>,
+   pub memory:    Vec<ImportMemory>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ImportMemory {
+   Read {
+      name:     String,
+      offset:   usize,
+      expected: Vec<u8>,
+   },
+   Write {
+      name:   String,
+      offset: usize,
+      bytes:  Vec<u8>,
+   },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -838,9 +854,8 @@ impl<'host> Execution<'host> {
       })
    }
 
-   /// Both modules receive the same import expectations. Zero stubs and
-   /// scripted return values cannot model callbacks that mutate guest memory
-   /// or reenter the instance.
+   /// Both modules receive the same import expectations. Scripted memory
+   /// effects use caller exports, but reentrant guest calls are not modeled.
    fn stub_imports(&mut self, host: &HostConfig) -> Result<(), Error> {
       let side = self.side;
       for import in self.module.imports() {
@@ -864,7 +879,8 @@ impl<'host> Execution<'host> {
                   &mut self.store,
                   signature,
                   move |mut caller, params, results| {
-                     caller.data_mut().call(
+                     HostState::call(
+                        &mut caller,
                         &import_module,
                         &import_name,
                         params,

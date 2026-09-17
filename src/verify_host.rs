@@ -1,4 +1,5 @@
 use wasmi::{
+   Caller,
    Val,
    ValType,
 };
@@ -7,19 +8,19 @@ use crate::{
    verify::{
       HostConfig,
       HostImports,
+      ImportMemory,
       Value,
    },
    verify_limits::Budget,
 };
 
-/// Host callbacks cannot share a cursor between the original and rewritten
-/// instance.
+/// Each instance owns its cursor over shared host expectations.
 pub struct HostState<'host> {
    /// Initialization and later callbacks share the instance's resource limits.
    pub budget:   Budget,
    /// Both instances borrow these expectations for the entire workload.
    pub imports:  &'host HostImports,
-   /// A callback advances only after all its inputs and outputs validate.
+   /// A callback advances only after its entire script succeeds.
    pub consumed: usize,
 }
 
@@ -37,21 +38,22 @@ impl<'host> HostState<'host> {
    /// Script failures are host errors, never guest traps that could count as
    /// agreement.
    pub fn call(
-      &mut self,
+      caller: &mut Caller<'_, Self>,
       module: &str,
       name: &str,
       arguments: &[Val],
       result_types: &[ValType],
       results: &mut [Val],
    ) -> Result<(), wasmi::Error> {
-      let HostImports::Script(ref calls) = *self.imports else {
+      let imports = caller.data().imports;
+      let HostImports::Script(ref calls) = *imports else {
          for (slot, result_type) in results.iter_mut().zip(result_types) {
             *slot = Val::default_for_ty(*result_type);
          }
 
          return Ok(());
       };
-      let position = self.consumed;
+      let position = caller.data().consumed;
       let expected = calls.get(position).ok_or_else(|| {
          wasmi::Error::new(format!(
             "unexpected import #{position} {module}.{name}, script exhausted"
@@ -110,7 +112,8 @@ impl<'host> HostState<'host> {
          *slot = value;
       }
 
-      self.consumed += 1;
+      apply_memory(caller, position, &expected.memory)?;
+      caller.data_mut().consumed += 1;
       Ok(())
    }
 
@@ -128,4 +131,66 @@ impl<'host> HostState<'host> {
 
       Ok(())
    }
+}
+
+/// Host mismatches cannot count as matching guest traps.
+fn apply_memory(
+   caller: &mut Caller<'_, HostState<'_>>,
+   position: usize,
+   actions: &[ImportMemory],
+) -> Result<(), wasmi::Error> {
+   for (index, action) in actions.iter().enumerate() {
+      let (name, offset) = match *action {
+         ImportMemory::Read {
+            ref name, offset, ..
+         }
+         | ImportMemory::Write {
+            ref name, offset, ..
+         } => (name, offset),
+      };
+      let memory = caller
+         .get_export(name)
+         .and_then(wasmi::Extern::into_memory)
+         .ok_or_else(|| {
+            wasmi::Error::new(format!(
+               "import #{position} memory action #{index} has no exported memory {name}"
+            ))
+         })?;
+
+      match *action {
+         ImportMemory::Read { ref expected, .. } => {
+            let end = offset
+               .checked_add(expected.len())
+               .filter(|end| *end <= memory.data_size(&*caller))
+               .ok_or_else(|| {
+                  wasmi::Error::new(format!(
+                     "import #{position} memory read #{index} is out of bounds"
+                  ))
+               })?;
+
+            if !caller.data_mut().budget.capture(expected.len()) {
+               return Err(wasmi::Error::new(
+                  "host memory reads exceed the verification budget",
+               ));
+            }
+
+            if memory.data(&*caller)[offset..end] != *expected {
+               return Err(wasmi::Error::new(format!(
+                  "import #{position} memory read #{index} differs from the expected bytes"
+               )));
+            }
+         },
+         ImportMemory::Write { ref bytes, .. } => {
+            memory
+               .write(&mut *caller, offset, bytes)
+               .map_err(|source| {
+                  wasmi::Error::new(format!(
+                     "import #{position} memory write #{index} failed, {source}"
+                  ))
+               })?;
+         },
+      }
+   }
+
+   Ok(())
 }
