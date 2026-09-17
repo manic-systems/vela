@@ -90,9 +90,9 @@ enum Command {
       #[pound(long)]
       no_data_enc: bool,
 
-      /// Fold encrypted data checksums into marker state at decryption.
+      /// Fold ciphertext and integer global initializers into marker state.
       #[pound(long)]
-      data_integrity: bool,
+      integrity: bool,
 
       /// Decrypt every segment up front instead of on first use.
       #[pound(long)]
@@ -205,7 +205,7 @@ fn main() -> Result<()> {
          output,
          seed,
          no_data_enc,
-         data_integrity,
+         integrity,
          eager,
          no_markers,
          evolve_pool,
@@ -242,7 +242,7 @@ fn main() -> Result<()> {
             exclude_reachable,
             seed,
             data_enc: !no_data_enc,
-            data_integrity,
+            integrity,
             lazy: !eager,
             markers: !no_markers,
             evolve_pool,

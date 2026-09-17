@@ -339,4 +339,10 @@ or `--markers-all` enabled.
 vela adds work for static analysis; it explicitly does not provide a protection
 boundary. The module ships its decryption code and seeds, and decrypted data
 remains in linear memory. Anyone who can run the module can recover that data.
-Executable code isn't encrypted, and vela doesn't add an integrity check.
+Executable code isn't encrypted or measured. `--integrity` folds ciphertext
+checksum mismatches and changes to literal i32 and i64 global initializers into
+marker state, without branching on a tamper result. Global initializers are
+checked before guest startup, and ciphertext is checked once at decryption.
+Imported globals, other initializer forms, and later guest or host writes are
+not covered. The module also ships the integrity computation, so it is not an
+authentication boundary.

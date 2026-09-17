@@ -1,7 +1,6 @@
 use std::num::NonZeroU64;
 
 use walrus::{
-   ConstExpr,
    InstrSeqBuilder,
    LocalId,
    ValType,
@@ -69,10 +68,10 @@ impl Decryptor {
       module: &mut walrus::Module,
       memory: walrus::MemoryId,
       names: bool,
-      pool: Option<&Pool>,
+      pool: &Pool,
    ) -> Self {
       let mut params = vec![ValType::I32, ValType::I32, ValType::I64];
-      if pool.is_some() {
+      if pool.integrity_func().is_some() {
          params.push(ValType::I32);
       }
 
@@ -82,14 +81,12 @@ impl Decryptor {
       let len = module.locals.add(ValType::I32);
       let seed = module.locals.add(ValType::I64);
       let state = module.locals.add(ValType::I64);
-      let integrity = pool.map(|_| {
+      let integrity = pool.integrity_func().map(|fold| {
          (
             module.locals.add(ValType::I32),
             module.locals.add(ValType::I32),
             module.locals.add(ValType::I32),
-            module
-               .globals
-               .add_local(ValType::I32, true, false, ConstExpr::Value(Value::I32(0))),
+            fold,
          )
       });
 
@@ -173,8 +170,14 @@ impl Decryptor {
 
       let mut arguments = vec![ptr, len, seed];
 
-      if let (Some(markers), Some((expected, hash, _, latch))) = (pool, integrity) {
-         markers.fold_integrity(&mut builder.func_body(), hash, expected, latch);
+      if let Some((expected, hash, _, fold)) = integrity {
+         builder
+            .func_body()
+            .local_get(hash)
+            .local_get(expected)
+            .binop(BinaryOp::I32Xor)
+            .call(fold);
+
          arguments.push(expected);
       }
 

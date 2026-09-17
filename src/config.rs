@@ -211,7 +211,7 @@ pub struct Config {
    pub exclude_reachable: Vec<FunctionSelector>,
    pub seed:              u64,
    pub data_enc:          bool,
-   pub data_integrity:    bool,
+   pub integrity:         bool,
    /// Decrypt eligible segments on first use. Targets of pointers stored in
    /// data stay eager because the code scan can't tell when they'll be read.
    pub lazy:              bool,
@@ -251,7 +251,7 @@ impl Default for Config {
          exclude_reachable: Vec::new(),
          seed:              0,
          data_enc:          true,
-         data_integrity:    false,
+         integrity:         false,
          lazy:              true,
          markers:           true,
          evolve_pool:       false,
@@ -494,6 +494,8 @@ pub struct Report {
    pub unresolved_memory_uses:     usize,
    pub bytes_encrypted:            usize,
    pub bytes_integrity:            usize,
+   pub globals_integrity:          usize,
+   pub globals_total:              usize,
    pub bytes_eager:                usize,
    pub bytes_lazy:                 usize,
    pub bytes_startup_upper_bound:  usize,
@@ -522,11 +524,11 @@ impl fmt::Display for Report {
          self.segments_lazy, self.segments_forced_eager, self.unresolved_memory_uses
       )?;
 
-      if self.bytes_integrity != 0 {
+      if self.bytes_integrity != 0 || self.globals_integrity != 0 {
          writeln!(
             f,
-            "integrity {} encrypted bytes folded into markers",
-            self.bytes_integrity
+            "integrity {} encrypted bytes and {}/{} initial globals folded into markers",
+            self.bytes_integrity, self.globals_integrity, self.globals_total
          )?;
       }
 

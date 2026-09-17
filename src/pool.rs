@@ -5,6 +5,7 @@ use walrus::{
    FunctionBuilder,
    FunctionId,
    GlobalId,
+   GlobalKind,
    InstrSeqBuilder,
    LocalId,
    Module,
@@ -41,21 +42,112 @@ pub struct Pool {
    values:    Vec<i32>,
    /// Startup function that mixes globals before use.
    seed_func: FunctionId,
+   /// Global and ciphertext mismatches share one latch to prevent cancellation.
+   integrity: Option<FunctionId>,
 }
 
 impl Pool {
+   /// Initial values are sampled before guest startup can legitimately change
+   /// them.
+   pub fn enable_integrity(
+      &mut self,
+      module: &mut Module,
+      originals: &[GlobalId],
+      names: bool,
+   ) -> usize {
+      let latch =
+         module
+            .globals
+            .add_local(ValType::I32, true, false, ConstExpr::Value(Value::I32(0)));
+
+      let delta = module.locals.add(ValType::I32);
+      let mut builder = FunctionBuilder::new(&mut module.types, &[ValType::I32], &[]);
+
+      if names {
+         builder.name("vela_integrity".to_owned());
+      }
+
+      self.fold_integrity(&mut builder.func_body(), delta, latch);
+      let fold = builder.finish(vec![delta], &mut module.funcs);
+      self.integrity = Some(fold);
+
+      let mut checks = Vec::<Instr>::new();
+      let mut covered = 0;
+
+      for global in originals {
+         let value = match module.globals.get(*global).kind {
+            GlobalKind::Local(ConstExpr::Value(value @ (Value::I32(_) | Value::I64(_)))) => value,
+            GlobalKind::Local(_) | GlobalKind::Import(_) => continue,
+         };
+
+         checks.push(GlobalGet { global: *global }.into());
+         checks.push(Const { value }.into());
+         checks.push(
+            Binop {
+               op: if matches!(value, Value::I32(_)) {
+                  BinaryOp::I32Xor
+               } else {
+                  BinaryOp::I64Xor
+               },
+            }
+            .into(),
+         );
+
+         if matches!(value, Value::I32(_)) {
+            checks.push(
+               Unop {
+                  op: UnaryOp::I64ExtendUI32,
+               }
+               .into(),
+            );
+         }
+
+         if covered != 0 {
+            checks.push(
+               Binop {
+                  op: BinaryOp::I64Or,
+               }
+               .into(),
+            );
+         }
+
+         covered += 1;
+      }
+
+      if covered == 0 {
+         return 0;
+      }
+
+      let snapshot = module.locals.add(ValType::I64);
+      let function = module.funcs.get_mut(self.seed_func).kind.unwrap_local_mut();
+      let mut body = function.builder_mut().func_body();
+
+      for instruction in checks {
+         body.instr(instruction);
+      }
+
+      body
+         .local_tee(snapshot)
+         .unop(UnaryOp::I32WrapI64)
+         .local_get(snapshot)
+         .i64_const(32)
+         .binop(BinaryOp::I64ShrU)
+         .unop(UnaryOp::I32WrapI64)
+         .binop(BinaryOp::I32Or)
+         .call(fold);
+
+      covered
+   }
+
+   /// Every integrity source must use the same persistent mismatch state.
+   pub const fn integrity_func(&self) -> Option<FunctionId> {
+      self.integrity
+   }
+
    /// New mismatch bits accumulate so later segments cannot undo corruption.
-   pub fn fold_integrity(
-      &self,
-      body: &mut InstrSeqBuilder<'_>,
-      delta: LocalId,
-      expected: LocalId,
-      latch: GlobalId,
-   ) {
+   fn fold_integrity(&self, body: &mut InstrSeqBuilder<'_>, delta: LocalId, latch: GlobalId) {
       body
          .local_get(delta)
-         .local_get(expected)
-         .binop(BinaryOp::I32Xor)
          .global_get(latch)
          .i32_const(-1)
          .binop(BinaryOp::I32Xor)
@@ -111,10 +203,14 @@ impl Pool {
       }
    }
 
-   /// Generated readers must stay outside the code passes that call them.
+   /// Generated helpers must stay outside the code passes that call them.
    #[inline]
-   pub fn readers(&self) -> impl Iterator<Item = FunctionId> + '_ {
-      self.slots.iter().filter_map(|entry| entry.1)
+   pub fn helpers(&self) -> impl Iterator<Item = FunctionId> + '_ {
+      self
+         .slots
+         .iter()
+         .filter_map(|entry| entry.1)
+         .chain(self.integrity)
    }
 
    /// Returns mixed pool values for evaluation.
@@ -255,6 +351,7 @@ impl Pool {
             .collect(),
          values,
          seed_func,
+         integrity: None,
       }
    }
 }

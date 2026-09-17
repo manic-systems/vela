@@ -98,9 +98,9 @@ pub enum TransformError {
    Table(#[source] Box<dyn StdError + Send + Sync>),
    #[error("cannot prove active data segments have disjoint placements")]
    DataPlacement,
-   #[error("data integrity requires data encryption and marker rewriting")]
+   #[error("integrity requires marker rewriting")]
    IntegrityPasses,
-   #[error("data integrity requires encrypted bytes and at least one rewritten marker")]
+   #[error("integrity requires covered data or globals and at least one rewritten marker")]
    IntegrityCoverage,
    #[error("output violates placement rules\n{}", .0.join("\n"))]
    Placement(Vec<String>),
@@ -152,7 +152,7 @@ impl<'config> Rewriter<'config> {
       seed: u64,
       prepared: Option<&Prepared>,
    ) -> Result<Self, TransformError> {
-      if config.data_integrity && (!config.data_enc || !config.markers) {
+      if config.integrity && !config.markers {
          return Err(TransformError::IntegrityPasses);
       }
 
@@ -187,13 +187,25 @@ impl<'config> Rewriter<'config> {
          |plan| plan.references(&module),
       );
 
-      let pool = Pool::build(
+      let original_globals = if config.integrity {
+         module.globals.iter().map(walrus::Global::id).collect()
+      } else {
+         Vec::new()
+      };
+
+      let mut pool = Pool::build(
          &mut module,
          &mut rng,
          config.pool_size,
          config.debug_names,
          config.evolve_pool,
       );
+
+      let globals_integrity = if config.integrity {
+         pool.enable_integrity(&mut module, &original_globals, config.debug_names)
+      } else {
+         0
+      };
 
       Ok(Self {
          functions,
@@ -205,7 +217,11 @@ impl<'config> Rewriter<'config> {
          segments,
          references,
          generated: HashSet::new(),
-         report: Report::default(),
+         report: Report {
+            globals_integrity,
+            globals_total: original_globals.len(),
+            ..Report::default()
+         },
       })
    }
 
@@ -240,8 +256,9 @@ impl<'config> Rewriter<'config> {
          passes::opaque::run(&mut self);
       }
 
-      if self.config.data_integrity
-         && (self.report.bytes_integrity == 0 || self.report.markers_rewritten == 0)
+      if self.config.integrity
+         && ((self.report.bytes_integrity == 0 && self.report.globals_integrity == 0)
+            || self.report.markers_rewritten == 0)
       {
          return Err(TransformError::IntegrityCoverage);
       }
@@ -289,6 +306,6 @@ impl<'config> Rewriter<'config> {
       self.module.start = Some(init);
       self.generated.insert(init);
       self.generated.insert(self.pool.seed_func());
-      self.generated.extend(self.pool.readers());
+      self.generated.extend(self.pool.helpers());
    }
 }

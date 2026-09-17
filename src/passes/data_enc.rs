@@ -45,12 +45,7 @@ pub fn run(rewriter: &mut Rewriter<'_>) -> Vec<ir::Instr> {
 
    let references = &rewriter.references.functions;
 
-   let decryptor = Decryptor::new(
-      module,
-      memory,
-      config.debug_names,
-      config.data_integrity.then_some(&rewriter.pool),
-   );
+   let decryptor = Decryptor::new(module, memory, config.debug_names, &rewriter.pool);
    generated.insert(decryptor.id());
    let mut eager = Vec::<ir::Instr>::new();
    let mut gates = Vec::<(analysis::Segment, FunctionId)>::new();
@@ -59,7 +54,7 @@ pub fn run(rewriter: &mut Rewriter<'_>) -> Vec<ir::Instr> {
       let seed = rng.next_nonzero_u64();
       let data = module.data.get_mut(segment.id);
       KeyStream::apply(seed, &mut data.value);
-      let checksum = config.data_integrity.then(|| {
+      let checksum = config.integrity.then(|| {
          report.bytes_integrity += segment.len;
          data.value.iter().fold(0_i32, |hash, byte| {
             (hash ^ i32::from(*byte)).wrapping_mul(CHECKSUM_FACTOR)
