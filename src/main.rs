@@ -12,9 +12,9 @@ use std::{
    time::Duration,
 };
 
-use eyre::{
+use misstep::{
    Result,
-   WrapErr as _,
+   ResultExt as _,
    bail,
 };
 use pound::Parse;
@@ -206,7 +206,7 @@ fn main() -> Result<()> {
    if worker::entrypoint()? {
       return Ok(());
    }
-   color_eyre::install()?;
+   misstep::install_panic_hook();
 
    match Command::parse() {
       Command::Run {
@@ -295,8 +295,8 @@ fn main() -> Result<()> {
          timeout,
          process_memory,
       } => {
-         let before = fs::read(&before_path).wrap_err("reading the original module")?;
-         let after = fs::read(&after_path).wrap_err("reading the rewritten module")?;
+         let before = fs::read(&before_path).context("reading the original module")?;
+         let after = fs::read(&after_path).context("reading the rewritten module")?;
          report_comparison(
             &before,
             &after,
@@ -336,7 +336,7 @@ fn run(
    }
 
    let input =
-      fs::read(input_path).wrap_err_with(|| format!("reading {}", input_path.display()))?;
+      fs::read(input_path).with_context(|| format!("reading {}", input_path.display()))?;
 
    let (output, report) = vela::transform(&input, config)?;
 
@@ -345,7 +345,7 @@ fn run(
    }
 
    fs::write(output_path, &output)
-      .wrap_err_with(|| format!("writing {}", output_path.display()))?;
+      .with_context(|| format!("writing {}", output_path.display()))?;
 
    println!("{report}");
    if report_functions {
