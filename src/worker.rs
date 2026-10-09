@@ -24,7 +24,7 @@ use crate::{
    },
    verify_wire::Request,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::{
    verify_wire::{
       self,
@@ -38,6 +38,8 @@ pub struct Limits {
    /// One deadline covers communication, parsing, compilation and execution.
    pub timeout:             Duration,
    /// Linux limits the worker's entire virtual address space to this size.
+   /// macOS cannot enforce an address-space cap, so only the deadline,
+   /// message and Wasm budgets bound the worker there.
    pub address_space_bytes: u64,
    /// Requests and replies each have this serialized byte limit.
    pub message_bytes:       usize,
@@ -57,7 +59,7 @@ impl Default for Limits {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum VerificationError {
-   #[error("isolated verification requires Linux")]
+   #[error("isolated verification requires Linux or macOS")]
    UnsupportedPlatform,
    #[error("verification process limits must be positive and representable")]
    InvalidLimits,
@@ -165,7 +167,7 @@ impl Verifier {
    }
 
    /// A reply is accepted only after the worker has exited successfully.
-   #[cfg(target_os = "linux")]
+   #[cfg(any(target_os = "linux", target_os = "macos"))]
    fn execute(
       &self,
       request: &Request<&[u8], &[Action]>,
@@ -226,7 +228,7 @@ impl Verifier {
 
    /// Unsupported hosts cannot fall back to verification in the caller's
    /// process.
-   #[cfg(not(target_os = "linux"))]
+   #[cfg(not(any(target_os = "linux", target_os = "macos")))]
    fn execute(
       &self,
       _request: &Request<&[u8], &[Action]>,
@@ -251,7 +253,7 @@ pub fn entrypoint() -> Result<bool, VerificationError> {
    {
       return Ok(false);
    }
-   #[cfg(target_os = "linux")]
+   #[cfg(any(target_os = "linux", target_os = "macos"))]
    {
       let address_space = arguments
          .next()
@@ -267,7 +269,7 @@ pub fn entrypoint() -> Result<bool, VerificationError> {
       worker_process::serve(address_space, message_bytes)?;
       Ok(true)
    }
-   #[cfg(not(target_os = "linux"))]
+   #[cfg(not(any(target_os = "linux", target_os = "macos")))]
    {
       Err(VerificationError::UnsupportedPlatform)
    }

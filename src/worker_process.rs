@@ -202,8 +202,16 @@ fn remaining(deadline: Instant) -> Result<Duration, VerificationError> {
 
 /// Limits are installed after exec and before any request decoding or Wasm
 /// parsing.
-pub fn serve(address_space: u64, message_bytes: usize) -> Result<(), VerificationError> {
+pub fn serve(
+   #[cfg_attr(
+      not(target_os = "linux"),
+      expect(unused_variables, reason = "macOS cannot enforce an address-space cap")
+   )]
+   address_space: u64,
+   message_bytes: usize,
+) -> Result<(), VerificationError> {
    for (resource, requested) in [
+      #[cfg(target_os = "linux")]
       (ProcessResource::As, address_space),
       (ProcessResource::Core, 0),
    ] {

@@ -267,11 +267,13 @@ returning. A valid reply followed by a failing exit is still a failure.
 Workers clear `LD_PRELOAD` and `LD_AUDIT` before exec because injected allocators
 can reserve terabytes before the address-space cap is installed.
 
-Process isolation currently requires Linux. Other platforms return an explicit
-unsupported-platform error. The limits apply to the verification worker, while
-the caller's input buffers and Vela's rewriting passes remain in the parent.
-Use `worker::Limits` to configure the process bounds, or `--timeout` and
-`--process-memory` from the CLI.
+Process isolation requires Linux or macOS. Other platforms return an explicit
+unsupported-platform error. macOS cannot enforce the address-space cap, so the
+worker there is bounded by the deadline, message limits and Wasm budgets alone.
+The limits apply to the verification worker, while the caller's input buffers
+and Vela's rewriting passes remain in the parent. Use `worker::Limits` to
+configure the process bounds, or `--timeout` and `--process-memory` from the
+CLI.
 
 Library hosts call `worker::entrypoint()` at the start of `main` and return
 immediately when it returns `true`. The same executable can then serve as the

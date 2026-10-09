@@ -46,8 +46,8 @@ mod verify_limits;
 /// Typed messages exchanged with the verification process.
 mod verify_wire;
 pub mod worker;
-/// Linux process limits and deadline-aware worker communication.
-#[cfg(target_os = "linux")]
+/// Process limits and deadline-aware worker communication.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod worker_process;
 
 use std::{
