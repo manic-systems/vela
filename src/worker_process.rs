@@ -23,11 +23,20 @@ use std::{
    },
 };
 
-use rustix::process::{
-   Resource as ProcessResource,
-   Rlimit,
-   getrlimit,
-   setrlimit,
+use rustix::{
+   event::{
+      PollFd,
+      PollFlags,
+      Timespec,
+      poll,
+   },
+   io::Errno,
+   process::{
+      Resource as ProcessResource,
+      Rlimit,
+      getrlimit,
+      setrlimit,
+   },
 };
 
 use crate::{
@@ -143,26 +152,34 @@ fn exchange(
    limit: usize,
    deadline: Instant,
 ) -> Result<Vec<u8>, VerificationError> {
+   socket
+      .set_nonblocking(true)
+      .map_err(|source| VerificationError::Io { source })?;
    while !message.is_empty() {
-      socket
-         .set_write_timeout(Some(remaining(deadline)?))
-         .map_err(|source| VerificationError::Io { source })?;
+      wait(socket, PollFlags::OUT, deadline)?;
       match socket.write(message) {
          Ok(0) => return Err(VerificationError::InvalidReply),
          Ok(written) => message = &message[written..],
-         Err(source) if source.kind() == io::ErrorKind::Interrupted => {},
-         Err(source) => return Err(transport(source)),
+         Err(source)
+            if matches!(
+               source.kind(),
+               io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+            ) => {},
+         Err(source) => return Err(VerificationError::Io { source }),
       }
    }
-   socket
-      .shutdown(Shutdown::Write)
-      .map_err(|source| VerificationError::Io { source })?;
+   if let Err(source) = socket.shutdown(Shutdown::Write)
+      && !matches!(
+         source.kind(),
+         io::ErrorKind::InvalidInput | io::ErrorKind::NotConnected
+      )
+   {
+      return Err(VerificationError::Io { source });
+   }
    let mut response = Vec::new();
    let mut buffer = [0_u8; 8192];
    loop {
-      socket
-         .set_read_timeout(Some(remaining(deadline)?))
-         .map_err(|source| VerificationError::Io { source })?;
+      wait(socket, PollFlags::IN, deadline)?;
       let size = buffer
          .len()
          .min(limit.saturating_sub(response.len()).saturating_add(1));
@@ -174,21 +191,40 @@ fn exchange(
             }
             response.extend_from_slice(&buffer[..read]);
          },
-         Err(source) if source.kind() == io::ErrorKind::Interrupted => {},
-         Err(source) => return Err(transport(source)),
+         Err(source)
+            if matches!(
+               source.kind(),
+               io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+            ) => {},
+         Err(source) => return Err(VerificationError::Io { source }),
       }
    }
 }
 
-/// Socket timeout errors represent the shared verification deadline.
-fn transport(source: io::Error) -> VerificationError {
-   if matches!(
-      source.kind(),
-      io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-   ) {
-      VerificationError::Timeout
-   } else {
-      VerificationError::Io { source }
+/// Darwin fails `setsockopt` with `EINVAL` once the peer has closed, which a
+/// worker that replies and exits would race, so the deadline is a `poll`.
+fn wait(
+   socket: &UnixStream,
+   events: PollFlags,
+   deadline: Instant,
+) -> Result<(), VerificationError> {
+   let mut fds = [PollFd::new(socket, events)];
+   loop {
+      let left = remaining(deadline)?;
+      let timeout = Timespec {
+         tv_sec:  i64::try_from(left.as_secs()).unwrap_or(i64::MAX),
+         tv_nsec: left.subsec_nanos().into(),
+      };
+      match poll(&mut fds, Some(&timeout)) {
+         Ok(0) => return Err(VerificationError::Timeout),
+         Ok(_) => return Ok(()),
+         Err(Errno::INTR) => {},
+         Err(source) => {
+            return Err(VerificationError::Io {
+               source: source.into(),
+            });
+         },
+      }
    }
 }
 

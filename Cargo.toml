@@ -31,7 +31,7 @@ wasmi      = { features = [ "portable-dispatch" ], version = "2.0.0" }
 wasmi_core = "2.0.0"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-rustix = { features = [ "process" ], version = "1.1.5" }
+rustix = { features = [ "event", "process" ], version = "1.1.5" }
 
 [profile.release]
 codegen-units = 1
