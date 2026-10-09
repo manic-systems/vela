@@ -17,9 +17,6 @@ name = "vela"
 name = "vela"
 path = "src/main.rs"
 
-[[example]]
-name = "export-proofs"
-path = "proofs/export.rs"
 
 [dependencies]
 brotli     = "9.0.0"
