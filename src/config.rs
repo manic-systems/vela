@@ -169,6 +169,8 @@ impl fmt::Display for FunctionSelector {
    }
 }
 
+pound::from_str!(FunctionSelector, MarkerDepth, PoolSize, Percentage);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum CodePass {

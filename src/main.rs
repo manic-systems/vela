@@ -33,173 +33,254 @@ use vela::{
 
 #[derive(Parse)]
 #[pound(name = "vela")]
+#[expect(
+   clippy::large_enum_variant,
+   reason = "#[pound(flatten)] parses a variant's args in place"
+)]
 /// A post-link obfuscator for WebAssembly.
 enum Command {
    /// Rewrite a module and write the result.
    Run {
-      /// Rewrite only these input function names, exports or #indices,
-      /// repeatable.
-      #[pound(long, parse = "str::parse")]
-      function: Vec<FunctionSelector>,
-
-      /// Rewrite only these functions in the indirect call pass. Scope only,
-      /// an absent flag inherits --function and an empty selection inherits it
-      /// too. Never enables a globally disabled pass. Repeatable.
-      #[pound(long, parse = "str::parse")]
-      call_function: Vec<FunctionSelector>,
-
-      /// Rewrite only these functions in the marker pass. Scope only, an
-      /// absent flag inherits --function and an empty selection inherits it
-      /// too. Never enables a globally disabled pass. Repeatable.
-      #[pound(long, parse = "str::parse")]
-      marker_function: Vec<FunctionSelector>,
-
-      /// Rewrite only these functions in the flatten pass. Scope only, an
-      /// absent flag inherits --function and an empty selection inherits it
-      /// too. Never enables a globally disabled pass. Repeatable.
-      #[pound(long, parse = "str::parse")]
-      flatten_function: Vec<FunctionSelector>,
-
-      /// Rewrite only these functions in the opaque pass. Scope only, an
-      /// absent flag inherits --function and an empty selection inherits it
-      /// too. Never enables a globally disabled pass. Repeatable.
-      #[pound(long, parse = "str::parse")]
-      opaque_function: Vec<FunctionSelector>,
-
-      /// Expand each code-pass root set through direct calls.
-      #[pound(long)]
-      include_callees: bool,
-
-      /// Keep these functions and their reachable callees out of every code
-      /// pass, including overrides. Repeatable.
-      #[pound(long, parse = "str::parse")]
-      exclude_reachable: Vec<FunctionSelector>,
+      /// Pass selection and tuning.
+      #[pound(flatten)]
+      obfuscation: RunArgs,
 
       /// Print instruction counts and rewrite results for each input function.
       #[pound(long)]
       report_functions: bool,
+
       /// Module to rewrite.
-      #[pound(parse = "(|value: &str| Ok::<_, String>(Box::new(PathBuf::from(value))))")]
-      input:            Box<PathBuf>,
+      input: PathBuf,
 
-      #[pound(
-         short,
-         long,
-         parse = "(|value: &str| Ok::<_, String>(Box::new(PathBuf::from(value))))"
-      )]
       /// Where the rewritten module gets written.
-      output: Box<PathBuf>,
-
-      /// Fixing the seed makes the whole transformation reproducible.
-      #[pound(long, default = "0")]
-      seed: u64,
-
-      /// Skip data segment encryption entirely.
-      #[pound(long)]
-      no_data_enc: bool,
-
-      /// Fold ciphertext and integer global initializers into marker state.
-      #[pound(long)]
-      integrity: bool,
-
-      /// Read-only input segment index, zero-based and repeatable. Requires
-      /// --integrity.
-      #[pound(long)]
-      readonly_segment: Vec<usize>,
-
-      /// Decrypt every segment up front instead of on first use.
-      #[pound(long)]
-      eager: bool,
-
-      /// Skip marker arithmetic entirely.
-      #[pound(long)]
-      no_markers: bool,
-
-      /// Advance encoded pool state without changing marker results.
-      #[pound(long)]
-      evolve_pool: bool,
-
-      /// Recursion depth of each synthesised marker expression.
-      #[pound(long, default = "2", parse = "str::parse")]
-      marker_depth: MarkerDepth,
-
-      /// Number of globals the marker expressions draw from.
-      #[pound(long, default = "8", parse = "str::parse")]
-      pool_size: PoolSize,
-
-      /// Rewrite all i32 constants, including non-address operands.
-      #[pound(long)]
-      markers_all: bool,
-
-      /// Skip promoting direct calls to indirect ones.
-      #[pound(long)]
-      no_indirect: bool,
-
-      /// Percentage of direct calls promoted to table dispatches.
-      #[pound(long, default = "60", parse = "str::parse")]
-      indirect_ratio: Percentage,
-
-      /// Insert never-taken branches. Off by default because it costs size for
-      /// the least benefit.
-      #[pound(long)]
-      opaque: bool,
-
-      /// Percentage of eligible branches turned opaque.
-      #[pound(long, default = "20", parse = "str::parse")]
-      opaque_ratio: Percentage,
-
-      /// Rewrite instruction sequences as `br_table` dispatch loops.
-      #[pound(long)]
-      flatten: bool,
-
-      /// Advance dispatch encodings during execution. Requires --flatten.
-      #[pound(long)]
-      evolve_dispatch: bool,
-
-      /// Percentage of eligible sequences flattened.
-      #[pound(long, default = "70", parse = "str::parse")]
-      flatten_ratio: Percentage,
-
-      /// Upper bound on regions a single sequence is cut into.
-      #[pound(long, default = "6")]
-      max_regions: usize,
+      #[pound(short, long)]
+      output: PathBuf,
 
       /// Compare zero-argument exports before writing the output.
       #[pound(long)]
       check: bool,
 
-      /// Fuel budget per module when checking, defaults to 100 million.
-      #[pound(long)]
-      fuel: Option<u64>,
-
-      /// Deadline in seconds for the complete verification worker.
-      #[pound(long)]
-      timeout: Option<u64>,
-
-      /// Maximum virtual address space in bytes for the verification worker.
-      #[pound(long)]
-      process_memory: Option<u64>,
-
-      /// Name generated helpers for debugging, exposing them to readers.
-      #[pound(long)]
-      debug_names: bool,
+      /// Fuel and limits for the optional --check pass.
+      #[pound(flatten)]
+      verify: VerifyArgs,
    },
    /// Run every zero-argument export of two modules and compare the results.
    Check {
       /// Path to the original, unrewritten module.
-      before:         PathBuf,
+      before: PathBuf,
       /// Path to the module produced by a previous `run`.
-      after:          PathBuf,
-      /// Fuel budget per module, defaults to 100 million.
-      #[pound(long)]
-      fuel:           Option<u64>,
-      /// Deadline in seconds for the complete verification worker.
-      #[pound(long)]
-      timeout:        Option<u64>,
-      /// Maximum virtual address space in bytes for the verification worker.
-      #[pound(long)]
-      process_memory: Option<u64>,
+      after:  PathBuf,
+
+      /// Fuel and limits for the verification worker.
+      #[pound(flatten)]
+      verify: VerifyArgs,
    },
+}
+
+/// Limits and fuel shared by both verification entry points.
+#[derive(Parse)]
+struct VerifyArgs {
+   /// Fuel budget per module when checking, defaults to 100 million.
+   #[pound(long)]
+   fuel:           Option<u64>,
+   /// Deadline in seconds for the complete verification worker.
+   #[pound(long)]
+   timeout:        Option<u64>,
+   /// Maximum virtual address space in bytes for the verification worker.
+   #[pound(long)]
+   process_memory: Option<u64>,
+}
+
+/// Everything that feeds a rewrite `Config`.
+#[derive(Parse)]
+#[expect(
+   clippy::struct_excessive_bools,
+   reason = "each bool independently toggles one pass, a state machine would only obscure that"
+)]
+struct RunArgs {
+   /// Rewrite only these input function names, exports or #indices,
+   /// repeatable.
+   #[pound(long)]
+   function: Vec<FunctionSelector>,
+
+   /// Rewrite only these functions in the indirect call pass. Scope only, an
+   /// absent flag inherits --function and an empty selection inherits it too.
+   /// Never enables a globally disabled pass. Repeatable.
+   #[pound(long)]
+   call_function: Vec<FunctionSelector>,
+
+   /// Rewrite only these functions in the marker pass. Scope only, an absent
+   /// flag inherits --function and an empty selection inherits it too. Never
+   /// enables a globally disabled pass. Repeatable.
+   #[pound(long)]
+   marker_function: Vec<FunctionSelector>,
+
+   /// Rewrite only these functions in the flatten pass. Scope only, an absent
+   /// flag inherits --function and an empty selection inherits it too. Never
+   /// enables a globally disabled pass. Repeatable.
+   #[pound(long)]
+   flatten_function: Vec<FunctionSelector>,
+
+   /// Rewrite only these functions in the opaque pass. Scope only, an absent
+   /// flag inherits --function and an empty selection inherits it too. Never
+   /// enables a globally disabled pass. Repeatable.
+   #[pound(long)]
+   opaque_function: Vec<FunctionSelector>,
+
+   /// Expand each code-pass root set through direct calls.
+   #[pound(long)]
+   include_callees: bool,
+
+   /// Keep these functions and their reachable callees out of every code pass,
+   /// including overrides. Repeatable.
+   #[pound(long)]
+   exclude_reachable: Vec<FunctionSelector>,
+
+   /// Fixing the seed makes the whole transformation reproducible.
+   #[pound(long, default = "0")]
+   seed: u64,
+
+   /// Encrypt data segments.
+   #[pound(long, negate, default = "true")]
+   data_enc: bool,
+
+   /// Fold ciphertext and integer global initializers into marker state.
+   #[pound(long)]
+   integrity: bool,
+
+   /// Read-only input segment index, zero-based and repeatable. Requires
+   /// --integrity.
+   #[pound(long)]
+   readonly_segment: Vec<usize>,
+
+   /// Decrypt every segment up front instead of on first use.
+   #[pound(long)]
+   eager: bool,
+
+   /// Apply marker arithmetic.
+   #[pound(long, negate, default = "true")]
+   markers: bool,
+
+   /// Advance encoded pool state without changing marker results.
+   #[pound(long)]
+   evolve_pool: bool,
+
+   /// Recursion depth of each synthesised marker expression.
+   #[pound(long, default = "2")]
+   marker_depth: MarkerDepth,
+
+   /// Number of globals the marker expressions draw from.
+   #[pound(long, default = "8")]
+   pool_size: PoolSize,
+
+   /// Rewrite all i32 constants, including non-address operands.
+   #[pound(long)]
+   markers_all: bool,
+
+   /// Promote direct calls to indirect ones.
+   #[pound(long = "indirect", negate, default = "true")]
+   indirect_calls: bool,
+
+   /// Percentage of direct calls promoted to table dispatches.
+   #[pound(long, default = "60")]
+   indirect_ratio: Percentage,
+
+   /// Insert never-taken branches. Off by default because it costs size for
+   /// the least benefit.
+   #[pound(long)]
+   opaque: bool,
+
+   /// Percentage of eligible branches turned opaque.
+   #[pound(long, default = "20")]
+   opaque_ratio: Percentage,
+
+   /// Rewrite instruction sequences as `br_table` dispatch loops.
+   #[pound(long)]
+   flatten: bool,
+
+   /// Advance dispatch encodings during execution. Requires --flatten.
+   #[pound(long)]
+   evolve_dispatch: bool,
+
+   /// Percentage of eligible sequences flattened.
+   #[pound(long, default = "70")]
+   flatten_ratio: Percentage,
+
+   /// Upper bound on regions a single sequence is cut into.
+   #[pound(long, default = "6")]
+   max_regions: usize,
+
+   /// Name generated helpers for debugging, exposing them to readers.
+   #[pound(long)]
+   debug_names: bool,
+}
+
+impl From<RunArgs> for Config {
+   #[inline]
+   fn from(args: RunArgs) -> Self {
+      let RunArgs {
+         function,
+         call_function,
+         marker_function,
+         flatten_function,
+         opaque_function,
+         include_callees,
+         exclude_reachable,
+         seed,
+         data_enc,
+         integrity,
+         readonly_segment,
+         eager,
+         markers,
+         evolve_pool,
+         marker_depth,
+         pool_size,
+         markers_all,
+         indirect_calls,
+         indirect_ratio,
+         opaque,
+         opaque_ratio,
+         flatten,
+         evolve_dispatch,
+         flatten_ratio,
+         max_regions,
+         debug_names,
+      } = args;
+
+      Self {
+         functions: function,
+         pass_functions: [
+            (CodePass::Indirect, call_function),
+            (CodePass::Markers, marker_function),
+            (CodePass::Flatten, flatten_function),
+            (CodePass::Opaque, opaque_function),
+         ]
+         .into_iter()
+         .filter(|entry| !entry.1.is_empty())
+         .collect::<BTreeMap<_, _>>(),
+         include_callees,
+         exclude_reachable,
+         seed,
+         data_enc,
+         integrity,
+         readonly_segments: readonly_segment.into_iter().collect::<BTreeSet<_>>(),
+         lazy: !eager,
+         markers,
+         evolve_pool,
+         marker_depth,
+         pool_size,
+         markers_all,
+         indirect_calls,
+         indirect_ratio,
+         opaque,
+         opaque_ratio,
+         flatten,
+         evolve_dispatch,
+         flatten_ratio,
+         max_regions,
+         debug_names,
+      }
+   }
 }
 
 fn main() -> Result<()> {
@@ -210,73 +291,14 @@ fn main() -> Result<()> {
 
    match Command::parse() {
       Command::Run {
-         function,
-         call_function,
-         marker_function,
-         flatten_function,
-         opaque_function,
-         include_callees,
-         exclude_reachable,
+         obfuscation,
          report_functions,
          input,
          output,
-         seed,
-         no_data_enc,
-         integrity,
-         readonly_segment,
-         eager,
-         no_markers,
-         evolve_pool,
-         marker_depth,
-         pool_size,
-         markers_all,
-         no_indirect,
-         indirect_ratio,
-         opaque,
-         opaque_ratio,
-         flatten,
-         evolve_dispatch,
-         flatten_ratio,
-         max_regions,
          check,
-         fuel,
-         timeout,
-         process_memory,
-         debug_names,
+         verify,
       } => {
-         let config = Config {
-            functions: function,
-            pass_functions: [
-               (CodePass::Indirect, call_function),
-               (CodePass::Markers, marker_function),
-               (CodePass::Flatten, flatten_function),
-               (CodePass::Opaque, opaque_function),
-            ]
-            .into_iter()
-            .filter(|entry| !entry.1.is_empty())
-            .collect::<BTreeMap<_, _>>(),
-            include_callees,
-            exclude_reachable,
-            seed,
-            data_enc: !no_data_enc,
-            integrity,
-            readonly_segments: readonly_segment.into_iter().collect::<BTreeSet<_>>(),
-            lazy: !eager,
-            markers: !no_markers,
-            evolve_pool,
-            marker_depth,
-            pool_size,
-            markers_all,
-            indirect_calls: !no_indirect,
-            indirect_ratio,
-            opaque,
-            opaque_ratio,
-            flatten,
-            evolve_dispatch,
-            flatten_ratio,
-            max_regions,
-            debug_names,
-         };
+         let config = Config::from(obfuscation);
 
          run(
             &input,
@@ -284,24 +306,22 @@ fn main() -> Result<()> {
             &config,
             check,
             report_functions,
-            fuel,
-            process_limits(timeout, process_memory),
+            verify.fuel,
+            process_limits(verify.timeout, verify.process_memory),
          )
       },
       Command::Check {
          before: before_path,
          after: after_path,
-         fuel,
-         timeout,
-         process_memory,
+         verify,
       } => {
          let before = fs::read(&before_path).context("reading the original module")?;
          let after = fs::read(&after_path).context("reading the rewritten module")?;
          report_comparison(
             &before,
             &after,
-            fuel,
-            process_limits(timeout, process_memory),
+            verify.fuel,
+            process_limits(verify.timeout, verify.process_memory),
          )
       },
    }
@@ -335,8 +355,7 @@ fn run(
       bail!("--evolve-dispatch requires --flatten");
    }
 
-   let input =
-      fs::read(input_path).with_context(|| format!("reading {}", input_path.display()))?;
+   let input = fs::read(input_path).with_context(|| format!("reading {}", input_path.display()))?;
 
    let (output, report) = vela::transform(&input, config)?;
 
@@ -344,8 +363,7 @@ fn run(
       report_comparison(&input, &output, fuel, limits)?;
    }
 
-   fs::write(output_path, &output)
-      .with_context(|| format!("writing {}", output_path.display()))?;
+   fs::write(output_path, &output).with_context(|| format!("writing {}", output_path.display()))?;
 
    println!("{report}");
    if report_functions {
