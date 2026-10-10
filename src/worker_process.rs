@@ -4,7 +4,6 @@ use std::{
       Read as _,
       Write as _,
    },
-   net::Shutdown,
    os::{
       fd::OwnedFd,
       unix::net::UnixStream,
@@ -139,27 +138,13 @@ pub fn run(
 /// renew it.
 fn exchange(
    socket: &mut UnixStream,
-   mut message: &[u8],
+   message: &[u8],
    limit: usize,
    deadline: Instant,
 ) -> Result<Vec<u8>, VerificationError> {
-   while !message.is_empty() {
-      arm(socket.set_write_timeout(Some(remaining(deadline)?)))?;
-      match socket.write(message) {
-         Ok(0) => return Err(VerificationError::InvalidReply),
-         Ok(written) => message = &message[written..],
-         Err(source) if source.kind() == io::ErrorKind::Interrupted => {},
-         Err(source) => return Err(transport(source)),
-      }
-   }
-   if let Err(source) = socket.shutdown(Shutdown::Write)
-      && !matches!(
-         source.kind(),
-         io::ErrorKind::InvalidInput | io::ErrorKind::NotConnected
-      )
-   {
-      return Err(VerificationError::Io { source });
-   }
+   let length = u64::try_from(message.len()).map_err(|_error| VerificationError::InvalidLimits)?;
+   send(socket, &length.to_le_bytes(), deadline)?;
+   send(socket, message, deadline)?;
    let mut response = Vec::new();
    let mut buffer = [0_u8; 8192];
    loop {
@@ -179,6 +164,25 @@ fn exchange(
          Err(source) => return Err(transport(source)),
       }
    }
+}
+
+/// The request carries its own length because Darwin can fail `shutdown` with
+/// `EINVAL`, which would leave the worker waiting for an end of stream.
+fn send(
+   socket: &mut UnixStream,
+   mut bytes: &[u8],
+   deadline: Instant,
+) -> Result<(), VerificationError> {
+   while !bytes.is_empty() {
+      arm(socket.set_write_timeout(Some(remaining(deadline)?)))?;
+      match socket.write(bytes) {
+         Ok(0) => return Err(VerificationError::InvalidReply),
+         Ok(written) => bytes = &bytes[written..],
+         Err(source) if source.kind() == io::ErrorKind::Interrupted => {},
+         Err(source) => return Err(transport(source)),
+      }
+   }
+   Ok(())
 }
 
 /// Darwin fails `setsockopt` with `EINVAL` once the peer has closed, and a
@@ -246,17 +250,25 @@ pub fn serve(
          }
       })?;
    }
-   let mut bytes = Vec::new();
-   let bound = u64::try_from(message_bytes).map_err(|_error| VerificationError::InvalidLimits)?;
-   io::stdin()
-      .lock()
-      .take(bound.saturating_add(1))
-      .read_to_end(&mut bytes)
+   let mut stdin = io::stdin().lock();
+   let mut prefix = [0_u8; 8];
+   stdin
+      .read_exact(&mut prefix)
       .map_err(|source| VerificationError::Io { source })?;
-   if bytes.len() > message_bytes {
+   let length = u64::from_le_bytes(prefix);
+   if length > u64::try_from(message_bytes).map_err(|_error| VerificationError::InvalidLimits)? {
       return Err(VerificationError::MessageTooLarge {
          limit: message_bytes,
       });
+   }
+   let mut bytes = Vec::new();
+   stdin
+      .by_ref()
+      .take(length)
+      .read_to_end(&mut bytes)
+      .map_err(|source| VerificationError::Io { source })?;
+   if u64::try_from(bytes.len()).ok() != Some(length) {
+      return Err(VerificationError::InvalidReply);
    }
    let request = verify_wire::decode::<Request<Vec<u8>, Vec<verify::Action>>>(&bytes)?;
    let compared = request.actions.as_ref().map_or_else(
