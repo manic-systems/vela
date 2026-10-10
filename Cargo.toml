@@ -1,6 +1,6 @@
 [package]
 name         = "vela-wasm"
-version      = "0.2.5"
+version      = "0.2.6"
 description  = "A post-link obfuscator for WebAssembly modules"
 authors      = [ "Amaan Qureshi <contact@amaanq.com>" ]
 repository   = "https://github.com/manic-systems/vela"
