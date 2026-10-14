@@ -1,5 +1,6 @@
 {
   lib,
+  buildPackages,
   rustPlatform,
   linkerInputs,
   systems,
@@ -16,6 +17,10 @@ rustPlatform.buildRustPackage {
 
   strictDeps = true;
   nativeBuildInputs = linkerInputs;
+
+  env = lib.optionalAttrs (linkerInputs != [ ]) {
+    RUSTFLAGS = "-Clinker=${buildPackages.clang}/bin/${buildPackages.clang.targetPrefix}clang -Clink-arg=--ld-path=wild";
+  };
 
   meta = {
     inherit (manifest) description;
