@@ -13,6 +13,8 @@
 
 !.cargo/
 !.cargo/config.toml
+!.github/
+!.github/**
 !fixtures/
 !fixtures/**
 !nix/
