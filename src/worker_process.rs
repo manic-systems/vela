@@ -267,6 +267,7 @@ pub fn serve(
       .take(length)
       .read_to_end(&mut bytes)
       .map_err(|source| VerificationError::Io { source })?;
+   drop(stdin);
    if u64::try_from(bytes.len()).ok() != Some(length) {
       return Err(VerificationError::InvalidReply);
    }
