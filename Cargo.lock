@@ -268,9 +268,9 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "misstep"
-version = "0.3.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78535bf5c8617e488ae09df837dd55c083781f496948e43c5a69504fc741e3c4"
+checksum = "54945ebe59d50ffb617d2381f24f2456dd71aa900b0f5a5068d0d67c05b1ed44"
 dependencies = [
  "yansi",
 ]
@@ -289,27 +289,27 @@ dependencies = [
 
 [[package]]
 name = "pound"
-version = "0.4.2"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71a98cdf41a4ea36c2980eedb512cc066db480413f38ac56bb42b29a753d9cf2"
+checksum = "9415a85b43c9f100b38691b2779e9a3c704e01f10af6e674a6b7fd2e1be500db"
 dependencies = [
  "pound-derive",
 ]
 
 [[package]]
 name = "pound-derive"
-version = "0.4.2"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "256f135a40dc7cf3278732d4a44f92c9002fafb4639b3cfc8d8a5c00ff7ae710"
+checksum = "3cbd90aba74d7559c11608901ae4b790567617e73aac9e6a7c5e7cb787bfb203"
 dependencies = [
  "pound-derive-impl",
 ]
 
 [[package]]
 name = "pound-derive-impl"
-version = "0.4.2"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d395e7aa2c542e1a85fb9a2ceaf93ac51ac662e788c36ed84bb7d4ffed1cd505"
+checksum = "5aa95e97a2c4024ee8b1a8442926deb08e878265d8c5821ca432df83ef0097d2"
 dependencies = [
  "proc-macro2",
  "quote",
