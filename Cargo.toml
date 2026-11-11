@@ -26,7 +26,7 @@ postcard   = { default-features = false, features = [ "use-std" ], version = "1.
 serde      = { features = [ "derive" ], version = "1.0.229" }
 sha2       = { default-features = false, version = "0.11.0" }
 thiserror  = "2.0.21"
-walrus     = "0.27.2"
+walrus     = "0.28.0"
 wasmi      = { features = [ "portable-dispatch" ], version = "2.0.0" }
 wasmi_core = "2.0.0"
 
