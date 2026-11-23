@@ -66,6 +66,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "caress"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8769b95e8254ef7093e5b44e11dc1f43a5550c1944079298f0a47955bd30b12"
+dependencies = [
+ "pound",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -475,6 +484,7 @@ name = "vela-wasm"
 version = "0.2.6"
 dependencies = [
  "brotli",
+ "caress",
  "misstep",
  "postcard",
  "pound",

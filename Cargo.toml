@@ -20,6 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 brotli     = "9.0.0"
+caress     = "0.3.0"
 misstep    = { features = [ "backtrace", "color", "panic-hook", "pretty" ], version = "0.4.1" }
 pound      = "0.6.0"
 postcard   = { default-features = false, features = [ "use-std" ], version = "1.1.3" }
