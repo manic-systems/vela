@@ -112,6 +112,19 @@ memories or a 64-bit memory are rejected before rewriting.
 | `--no-indirect`                  | Off         | Keep direct calls.                                           |
 | `--debug-names`                  | Off         | Name generated functions.                                    |
 
+## Completions
+
+The Nix package installs completions for Bash, Zsh, Fish and Nushell. To set
+completions up by hand, source the script vela prints.
+
+| Shell  | Setup                                                    |
+|--------|----------------------------------------------------------|
+| bash   | `source <(COMPLETE=bash vela)`                           |
+| zsh    | `COMPLETE=zsh vela > ~/.zfunc/_vela`, with it in `fpath` |
+| fish   | `COMPLETE=fish vela \| source`                           |
+| nu     | `COMPLETE=nu vela \| save vela.nu`, then `source` it     |
+| elvish | `eval (env COMPLETE=elvish vela \| slurp)`               |
+
 ## What it does
 
 ### Data encryption
