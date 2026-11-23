@@ -284,6 +284,8 @@ impl From<RunArgs> for Config {
 }
 
 fn main() -> Result<()> {
+   caress::handle(Command::SPEC);
+
    if worker::entrypoint()? {
       return Ok(());
    }
